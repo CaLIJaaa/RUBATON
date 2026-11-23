@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Раскрытие сделки · Solid</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body class="disclosure-app">
+    <header class="app-header">
+      <div class="header-row">
+        <div>
+          <p class="subtitle">Solid</p>
+          <h1>Раскрытие сделки</h1>
+        </div>
+        <a id="disclosure-exchange" href="/">Открыть обменник</a>
+      </div>
+    </header>
+    <main data-disclosure-content>
+      <section class="panel" aria-labelledby="disclosure-input-title">
+        <h2 id="disclosure-input-title">Квитанция сделки</h2>
+        <p class="page-description">Откройте квитанцию в браузере. По ней можно посмотреть сделку и сверить её с опубликованным пакетом.</p>
+        <form id="disclosure-form">
+          <p>
+            <label for="disclosure-file">Выберите JSON-файл</label>
+            <input id="disclosure-file" type="file" accept="application/json,.json">
+          </p>
+          <p>
+            <label for="disclosure-json">Или вставьте JSON</label>
+            <textarea id="disclosure-json" class="disclosure-json" rows="12" spellcheck="false"></textarea>
+          </p>
+          <div class="actions">
+            <button id="disclosure-submit" type="submit">Показать и проверить</button>
+            <button id="disclosure-demo" class="secondary" type="button">Загрузить пример</button>
+            <button id="disclosure-clear" class="secondary" type="button">Очистить</button>
+          </div>
+        </form>
+        <p id="disclosure-status" class="notice" role="status" aria-live="polite">Ожидаю квитанцию.</p>
+        <p id="disclosure-error" class="notice error" role="alert" hidden></p>
+        <details>
+          <summary>Когда доступна квитанция</summary>
+          <p class="help-text">Квитанция доступна в разделе обмена после закрытия пакета. В ZK-режиме пакет закрывается после четвёртого обмена. Неполный пакет закрывается при выводе средств, при снятии ликвидности или вручную администратором.</p>
+        </details>
+      </section>
+
+      <section id="disclosure-result" class="panel disclosure-result" aria-labelledby="disclosure-result-title" hidden>
+        <h2 id="disclosure-result-title">Раскрытая сделка</h2>
+        <p id="disclosure-pair" class="subtitle">Рынок определяется по сети и Vault квитанции</p>
+        <p id="disclosure-demo-notice" class="notice" hidden>Пример одной сделки из пакета четырёх. Адреса вымышлены. Пакет не опубликован.</p>
+        <p id="disclosure-token-notice" class="help-text">При проверке публикации сверяем токены из файла с данными Vault.</p>
+        <dl id="disclosure-summary" class="disclosure-summary"></dl>
+        <h3>Проверка квитанции</h3>
+        <p id="disclosure-local" class="notice"></p>
+        <p class="help-text">Браузер проверяет, соответствует ли сделка корню из файла. Версия v2 использует Poseidon и упорядоченное дерево, v1 использует Keccak и сортированные пары. Отдельная проверка публикации сверяет корни с Vault.</p>
+        <p><button id="disclosure-publication" type="button" class="secondary">Сверить публикацию в блокчейне</button></p>
+        <p id="disclosure-chain" class="notice" role="status" aria-live="polite">Публикация в блокчейне ещё не проверена.</p>
+        <p class="help-text">Для сверки сервер получает номер пакета и читает его в Vault.</p>
+        <details>
+          <summary>Корни и Merkle proof</summary>
+          <dl id="disclosure-proof" class="disclosure-summary"></dl>
+        </details>
+      </section>
+    </main>
+    <noscript>Для просмотра и проверки квитанции включите JavaScript.</noscript>
+    <script type="importmap">{"imports":{"ethers":"/assets/ethers.js"}}</script>
+    <script type="module" src="/disclosure.js"></script>
+  </body>
+</html>

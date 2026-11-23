@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Solid</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body class="exchange-app">
+    <header class="app-header">
+      <div class="header-row">
+        <h1 id="market-title">Solid</h1>
+        <div class="header-wallet">
+          <div id="connection-details" class="header-status" aria-live="polite">
+            <span id="wallet-address" class="wallet-status" hidden></span>
+            <span id="access-status"></span>
+          </div>
+          <div class="actions wallet-actions">
+            <a id="tenderly-setup-link" href="/setup" hidden>Настройка Tenderly</a>
+            <button id="connect-wallet" type="button" disabled>Подключить кошелёк</button>
+            <button id="cancel-wallet-connect" type="button" class="secondary" hidden>Отменить подключение</button>
+            <button id="disconnect-wallet" type="button" class="secondary" hidden>Отключить</button>
+          </div>
+        </div>
+      </div>
+      <nav id="navigation" aria-label="Разделы">
+        <a role="link" data-requires-entry data-route="swap" aria-disabled="true" tabindex="-1">Обмен</a>
+        <a role="link" data-requires-entry data-route="liquidity" aria-disabled="true" tabindex="-1">Ликвидность</a>
+        <a role="link" data-requires-entry data-route="account" aria-disabled="true" tabindex="-1">Мой баланс</a>
+        <a id="disclosure-link" href="#/disclosure" data-disclosure-link data-route="disclosure">Раскрытие сделки</a>
+        <a id="admin-link" role="link" data-requires-entry data-route="admin" aria-disabled="true" tabindex="-1" hidden>Админ</a>
+      </nav>
+    </header>
+
+    <main id="main">
+      <button id="operation-dialog-open" type="button" class="secondary" aria-haspopup="dialog" aria-controls="operation-dialog" hidden>Ход операции</button>
+      <p id="status" class="notice operation-status" role="status" aria-live="polite">Загрузка…</p>
+      <p id="error" class="notice error operation-status" role="alert" hidden></p>
+      <section id="market-selection" class="market-selection" aria-labelledby="market-selection-title" hidden>
+        <h2 id="market-selection-title">Торговая пара</h2>
+        <div id="market-cards" class="market-cards"></div>
+      </section>
+      <section id="account-readiness" class="notice readiness-panel" role="status" aria-live="polite" hidden>
+        <p id="account-readiness-message"></p>
+        <button id="load-private-balances" type="button" hidden>Загрузить мой баланс</button>
+      </section>
+
+      <section id="page-entry" class="panel entry-panel" data-page="entry" aria-labelledby="entry-title">
+        <h2 id="entry-title">Вход</h2>
+        <p>Для операций понадобится кошелёк.</p>
+        <p id="entry-policy" class="help-text">Допуск к новым операциям выдаёт администратор.</p>
+        <p class="confirmation">
+          <label class="checkbox-label">
+            <input id="consent" type="checkbox">
+            Подтверждаю вход в обменник
+          </label>
+        </p>
+        <button id="enter-app" type="button" disabled>Продолжить</button>
+      </section>
+
+      <section id="page-swap" data-page="swap" aria-labelledby="swap-title" inert hidden>
+        <div class="page-heading">
+          <h2 id="swap-title">Обмен</h2>
+          <div id="swap-tabs" class="swap-tabs" role="tablist" aria-label="Разделы обмена" hidden>
+            <button id="swap-trade-tab" type="button" role="tab" aria-controls="swap-trade-panel" aria-selected="true">Обмен токенов</button>
+            <button id="swap-demo-tab" type="button" role="tab" aria-controls="swap-demo-panel" aria-selected="false" tabindex="-1" hidden>Демо-настройки</button>
+          </div>
+        </div>
+        <div id="swap-trade-panel" role="tabpanel" aria-labelledby="swap-trade-tab">
+          <div class="swap-main-grid">
+            <form id="swap-form">
+              <fieldset data-requires-wallet data-new-activity disabled>
+                <legend>Параметры обмена</legend>
+                <div class="amount-row">
+                  <p>
+                    <label for="swap-amount">Сколько отдаёте</label>
+                    <input id="swap-amount" name="amount" type="text" inputmode="decimal" placeholder="0" autocomplete="off" required>
+                  </p>
+                  <p>
+                    <label for="swap-token-in">Токен</label>
+                    <select id="swap-token-in" name="tokenIn">
+                      <option value="RUBA" data-token-symbol="RUBA">RUBA</option>
+                      <option value="USDT" data-token-symbol="USDT">USDT</option>
+                    </select>
+                  </p>
+                </div>
+                <div class="quote-summary">
+                  <p class="help-text">Получите</p>
+                  <output id="swap-quote">Сначала запросите расчёт</output>
+                  <p class="help-text">Комиссия <output id="swap-fee">0,3% от суммы обмена</output></p>
+                </div>
+                <p>
+                  <label for="swap-slippage">Допустимое проскальзывание, %</label>
+                  <input id="swap-slippage" name="slippage" type="text" inputmode="decimal" value="0.5" autocomplete="off" required>
+                </p>
+                <div class="actions swap-actions">
+                  <button id="quote-swap" type="button" class="secondary">Рассчитать</button>
+                  <button id="submit-swap" type="submit" disabled>Обменять</button>
+                </div>
+                <p class="help-text">Токены поступят на баланс обменника. Вывод на кошелёк доступен в разделе «Мой баланс».</p>
+              </fieldset>
+            </form>
+
+            <section id="market-dashboard" class="panel market-dashboard" hidden aria-labelledby="market-dashboard-title">
+              <h3 id="market-dashboard-title">Цена в пуле</h3>
+              <dl class="connection-info dashboard-stats">
+                <div><dt>Цена AMM</dt><dd id="dashboard-spot">—</dd></div>
+                <div><dt>Рыночный ориентир</dt><dd id="dashboard-target">—</dd></div>
+                <div><dt>Отклонение</dt><dd id="dashboard-deviation">—</dd></div>
+              </dl>
+              <figure class="market-chart-wrap">
+                <div class="market-chart-toolbar">
+                  <ul class="chart-legend" aria-label="Обозначения графика">
+                    <li class="chart-legend-amm">Цена AMM</li>
+                    <li class="chart-legend-target">Текущий ориентир</li>
+                  </ul>
+                  <select id="market-chart-period" aria-label="Период графика">
+                    <option value="900" selected>15 мин</option>
+                    <option value="3600">1 час</option>
+                    <option value="all">Вся история</option>
+                  </select>
+                </div>
+                <svg id="market-chart" viewBox="0 0 600 240" role="group" tabindex="0" aria-label="История цены AMM и рыночного ориентира" aria-describedby="market-chart-note"></svg>
+                <figcaption class="market-chart-caption">
+                  <p id="market-chart-reading" role="status" aria-live="polite" aria-atomic="true"></p>
+                  <p id="market-chart-note">Время МСК</p>
+                </figcaption>
+              </figure>
+              <p id="dashboard-source" class="help-text">На графике показаны подтверждённые цены.</p>
+              <p id="own-price-preview" class="help-text"></p>
+              <p id="arbitrage-status" class="help-text" role="status"></p>
+              <button id="dashboard-refresh" type="button" class="secondary">Обновить принятые цены</button>
+            </section>
+          </div>
+
+          <div class="forms-grid swap-secondary-grid">
+            <fieldset id="publication-controls" data-requires-wallet disabled>
+              <legend>Публикация в блокчейне</legend>
+              <p id="publication-status" role="status" aria-live="polite">Обновите очередь публикации.</p>
+              <div class="actions">
+                <button id="publication-refresh" type="button" class="secondary" disabled>Обновить готовый пакет</button>
+                <button id="publication-submit" type="button" disabled>Опубликовать пакет</button>
+              </div>
+              <details>
+                <summary>Как формируются пакеты</summary>
+                <p>В ZK-режиме в пакете до четырёх обменов. Неполный пакет закрывается при выводе средств, при снятии ликвидности или вручную администратором. Регистрация, пополнение и операции с ликвидностью могут публиковаться отдельно. При публикации отправитель оплачивает комиссию сети.</p>
+              </details>
+            </fieldset>
+
+            <form id="receipt-export-form">
+              <fieldset data-requires-wallet disabled>
+                <legend>Квитанция сделки</legend>
+                <p id="receipt-summary" role="status" aria-live="polite">Номер сделки появится после обмена.</p>
+                <p id="receipt-publication" class="help-text"></p>
+                <p>
+                  <label for="receipt-trade-id">Номер своей сделки</label>
+                  <input id="receipt-trade-id" type="text" inputmode="numeric" autocomplete="off" pattern="[1-9][0-9]*" required>
+                </p>
+                <p class="help-text">Номер выдаётся после вашего обмена в выбранной паре. Квитанции бота и других кошельков здесь недоступны.</p>
+                <div class="actions">
+                  <button id="receipt-load" type="submit" class="secondary" disabled>Загрузить квитанцию</button>
+                  <button id="receipt-download" type="button" disabled>Скачать квитанцию</button>
+                </div>
+                <p class="receipt-link"><a href="#/disclosure" data-disclosure-link>Открыть раскрытие сделки</a></p>
+                <details>
+                  <summary>Что содержит квитанция</summary>
+                  <p>После закрытия пакета можно получить квитанцию по номеру сделки. Кошелёк запросит подпись. В файле указаны суммы сделки и адрес кошелька. Открыть файл можно без входа.</p>
+                </details>
+              </fieldset>
+            </form>
+          </div>
+        </div>
+
+        <div id="swap-demo-panel" role="tabpanel" aria-labelledby="swap-demo-tab" hidden>
+          <section id="market-admin" class="demo-settings" aria-labelledby="demo-settings-title" hidden>
+            <h3 id="demo-settings-title">Демо-настройки <span id="demo-market-label" class="pair-label">RUBA / USDT</span></h3>
+            <p id="demo-access-notice" class="notice" hidden></p>
+            <div class="forms-grid demo-settings-grid">
+              <form id="reference-prices-form">
+                <fieldset id="reference-controls" disabled>
+                  <legend>Ориентиры для всех пар</legend>
+                  <p class="help-text">Бот использует эти цены в USDT, чтобы выравнивать цены в пулах.</p>
+                  <div class="price-inputs">
+                    <p><label for="reference-ruba">RUBA / USDT</label><input id="reference-ruba" type="text" inputmode="decimal" value="1"></p>
+                    <p><label for="reference-usdt">USDT / USDT</label><input id="reference-usdt" type="text" value="1" readonly></p>
+                    <p><label for="reference-weth">WETH / USDT</label><input id="reference-weth" type="text" inputmode="decimal" value="3000"></p>
+                    <p><label for="reference-wbtc">WBTC / USDT</label><input id="reference-wbtc" type="text" inputmode="decimal" value="90000"></p>
+                  </div>
+                  <button type="submit">Подписать цены</button>
+                </fieldset>
+              </form>
+              <form id="arbitrage-form">
+                <fieldset id="arbitrage-controls" disabled>
+                  <legend>Бот выбранного пула</legend>
+                  <p><label class="checkbox-label"><input id="arbitrage-enabled" type="checkbox">Включить выравнивание цены</label></p>
+                  <p><label for="arbitrage-delay">Задержка, секунд</label><input id="arbitrage-delay" type="number" min="5" max="3600" value="30"></p>
+                  <div class="actions">
+                    <button type="submit">Подписать настройки</button>
+                    <button id="private-monitor" type="button" class="secondary">Запросить текущее состояние</button>
+                  </div>
+                  <p id="admin-monitor-result" class="help-text" role="status">Состояние пула ещё не запрошено.</p>
+                </fieldset>
+              </form>
+            </div>
+            <fieldset id="batch-admin-controls" disabled>
+              <legend>Пакет выбранного пула</legend>
+              <p class="help-text">Пакет из 1–3 обменов можно закрыть вручную. Комиссию за публикацию оплачивает администратор.</p>
+              <button id="close-current-batch" type="button" disabled>Закрыть текущий пакет</button>
+              <p id="batch-close-result" class="help-text" role="status" aria-live="polite">Пакет ещё не запрашивался.</p>
+            </fieldset>
+          </section>
+        </div>
+      </section>
+
+      <section id="page-liquidity" data-page="liquidity" aria-labelledby="liquidity-title" inert hidden>
+        <div class="page-heading">
+          <div>
+            <h2 id="liquidity-title">Пул ликвидности</h2>
+            <p class="page-description">Чтобы внести ликвидность, пополните баланс обменника обоими токенами.</p>
+          </div>
+          <div class="pool-summary">
+            <p><span class="help-text">Ваши LP-доли</span><output id="lp-shares">—</output></p>
+            <p><span class="help-text">Пул</span><strong id="pool-pair-label">RUBA / USDT</strong></p>
+          </div>
+        </div>
+        <div class="forms-grid">
+          <form id="liquidity-add-form">
+            <fieldset data-requires-wallet data-new-activity disabled>
+              <legend>Добавить ликвидность</legend>
+              <p>
+                <label for="liquidity-ruba">Сумма <span data-token-symbol="RUBA">RUBA</span></label>
+                <input id="liquidity-ruba" name="rubaDesired" type="text" inputmode="decimal" placeholder="0" autocomplete="off" required>
+              </p>
+              <p>
+                <label for="liquidity-usdt">Сумма <span data-token-symbol="USDT">USDT</span></label>
+                <input id="liquidity-usdt" name="usdtDesired" type="text" inputmode="decimal" placeholder="0" autocomplete="off" required>
+              </p>
+              <p class="help-text">Токены вносятся в пропорции пула. Остаток сохранится на балансе.</p>
+              <details>
+                <summary>Минимальные суммы вложения</summary>
+                <p>Укажите минимальные суммы. 0 снимает ограничение.</p>
+                <p>
+                  <label for="liquidity-ruba-min">Минимум <span data-token-symbol="RUBA">RUBA</span></label>
+                  <input id="liquidity-ruba-min" name="rubaMin" type="text" inputmode="decimal" value="0" autocomplete="off">
+                </p>
+                <p>
+                  <label for="liquidity-usdt-min">Минимум <span data-token-symbol="USDT">USDT</span></label>
+                  <input id="liquidity-usdt-min" name="usdtMin" type="text" inputmode="decimal" value="0" autocomplete="off">
+                </p>
+              </details>
+              <button id="submit-liquidity-add" type="submit">Вложить в пул</button>
+            </fieldset>
+          </form>
+
+          <form id="liquidity-remove-form">
+            <fieldset data-requires-wallet disabled>
+              <legend>Забрать ликвидность</legend>
+              <p>
+                <label for="liquidity-shares">Сколько LP-долей забрать</label>
+                <input id="liquidity-shares" name="shares" type="text" inputmode="decimal" placeholder="0" autocomplete="off" required>
+              </p>
+              <p class="help-text"><span data-token-symbol="RUBA">RUBA</span> и <span data-token-symbol="USDT">USDT</span> вернутся на баланс обменника.</p>
+              <details>
+                <summary>Минимальные суммы возврата</summary>
+                <p>Укажите минимальные суммы. 0 снимает ограничение.</p>
+                <p>
+                  <label for="liquidity-remove-ruba-min">Минимум <span data-token-symbol="RUBA">RUBA</span></label>
+                  <input id="liquidity-remove-ruba-min" name="rubaMin" type="text" inputmode="decimal" value="0" autocomplete="off">
+                </p>
+                <p>
+                  <label for="liquidity-remove-usdt-min">Минимум <span data-token-symbol="USDT">USDT</span></label>
+                  <input id="liquidity-remove-usdt-min" name="usdtMin" type="text" inputmode="decimal" value="0" autocomplete="off">
+                </p>
+              </details>
+              <button id="submit-liquidity-remove" type="submit" class="secondary">Забрать из пула</button>
+            </fieldset>
+          </form>
+        </div>
+        <p class="help-text liquidity-follow-up">Готовый ZK-переход можно опубликовать в разделе <a href="#/swap">«Обмен»</a>.</p>
+      </section>
+
+      <section id="page-account" data-page="account" aria-labelledby="account-title" inert hidden>
+        <div class="page-heading">
+          <h2 id="account-title">Мой баланс</h2>
+          <button id="refresh-balances" type="button" class="secondary" disabled>Обновить баланс</button>
+        </div>
+        <div class="table-container" tabindex="0" role="region" aria-label="Балансы токенов">
+          <table aria-label="Балансы токенов">
+            <thead>
+              <tr><th scope="col">Токен</th><th scope="col">В кошельке</th><th scope="col">В обменнике</th><th scope="col">Ожидает вывода</th></tr>
+            </thead>
+            <tbody>
+              <tr><th scope="row" data-token-symbol="RUBA">RUBA</th><td id="wallet-ruba">—</td><td id="internal-ruba">—</td><td id="pending-ruba">—</td></tr>
+              <tr><th scope="row" data-token-symbol="USDT">USDT</th><td id="wallet-usdt">—</td><td id="internal-usdt">—</td><td id="pending-usdt">—</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="forms-grid">
+          <form id="deposit-form">
+            <fieldset data-requires-wallet data-new-activity data-deposit disabled>
+              <legend>Пополнить баланс</legend>
+              <div class="amount-row">
+                <p>
+                  <label for="deposit-amount">Сумма</label>
+                  <input id="deposit-amount" name="amount" type="text" inputmode="decimal" placeholder="0" autocomplete="off" required>
+                </p>
+                <p>
+                  <label for="deposit-token">Токен</label>
+                  <select id="deposit-token" name="token"><option value="RUBA" data-token-symbol="RUBA">RUBA</option><option value="USDT" data-token-symbol="USDT">USDT</option></select>
+                </p>
+              </div>
+              <p class="help-text">Кошелёк может запросить разрешение на перевод токенов.</p>
+              <button id="submit-deposit" type="submit">Пополнить</button>
+            </fieldset>
+          </form>
+
+          <form id="withdraw-form">
+            <fieldset data-requires-wallet disabled>
+              <legend>Вывести на кошелёк</legend>
+              <div class="amount-row">
+                <p>
+                  <label for="withdraw-amount">Сумма</label>
+                  <input id="withdraw-amount" name="amount" type="text" inputmode="decimal" placeholder="0" autocomplete="off" required>
+                </p>
+                <p>
+                  <label for="withdraw-token">Токен</label>
+                  <select id="withdraw-token" name="token"><option value="RUBA" data-token-symbol="RUBA">RUBA</option><option value="USDT" data-token-symbol="USDT">USDT</option></select>
+                </p>
+              </div>
+              <p class="help-text">Для вывода подтвердите запрос и транзакцию в кошельке.</p>
+              <button id="submit-withdraw" type="submit">Вывести</button>
+            </fieldset>
+          </form>
+        </div>
+        <section class="panel withdrawals-panel" aria-labelledby="withdrawals-title">
+          <h3 id="withdrawals-title">Запросы на вывод</h3>
+          <p id="withdrawal-help" class="help-text">Сохранённую заявку можно продолжить без повторного резервирования.</p>
+          <div id="withdrawal-list">Нет загруженных запросов</div>
+        </section>
+        <div class="forms-grid account-tools">
+          <fieldset id="faucet-panel" data-requires-wallet hidden disabled>
+            <legend>Тестовые токены</legend>
+            <p class="help-text">Тестовые ERC-20 поступают на кошелёк. Запросить токены можно раз в 60 секунд.</p>
+            <p>
+              <label for="faucet-token">Токен</label>
+              <select id="faucet-token"><option value="RUBA" data-token-symbol="RUBA">RUBA</option><option value="USDT" data-token-symbol="USDT">USDT</option></select>
+            </p>
+            <button id="faucet-submit" type="button" disabled>Получить тестовые токены</button>
+          </fieldset>
+          <fieldset id="zk-balance-panel" data-requires-wallet hidden disabled>
+            <legend>Защищённый баланс</legend>
+            <p id="zk-balance-status" role="status" aria-live="polite">Загрузите своё доказательство баланса.</p>
+            <div class="actions">
+              <button id="zk-register" type="button" disabled>Зарегистрировать защищённый баланс</button>
+              <button id="zk-proof-refresh" type="button" class="secondary" disabled>Проверить доказательство</button>
+            </div>
+            <details>
+              <summary>Резервное копирование и восстановление</summary>
+              <p>В копии хранятся ключ просмотра, балансы и данные для выплаты. Импорт выполняется в браузере. Чтобы создать новое доказательство, нужен prover.</p>
+              <div class="actions">
+                <button id="zk-backup-export" type="button" class="secondary" disabled>Скачать резервную копию</button>
+                <button id="zk-recover-chain" type="button" class="secondary" disabled>Восстановить из блокчейна</button>
+              </div>
+              <p class="backup-upload"><label for="zk-backup-import">Восстановить свою резервную копию</label><input id="zk-backup-import" type="file" accept="application/json,.json" disabled></p>
+            </details>
+            <p class="receipt-link"><a href="#/swap">Открыть публикацию ZK-перехода</a></p>
+          </fieldset>
+        </div>
+      </section>
+
+      <section id="page-admin" data-page="admin" aria-labelledby="admin-title" inert hidden>
+        <div class="page-heading">
+          <div>
+            <h2 id="admin-title">Админ</h2>
+            <p id="admin-vault-status" class="page-description" role="status"></p>
+          </div>
+          <button id="admin-vault-refresh" type="button" class="secondary" disabled>Обновить из сети</button>
+        </div>
+        <p id="admin-tx-status" class="help-text" role="status"></p>
+        <div class="forms-grid">
+          <form id="admin-wallet-form">
+            <fieldset id="admin-wallet-controls" disabled>
+              <legend>Whitelist</legend>
+              <p>
+                <label for="admin-wallet-address">Адрес кошелька</label>
+                <input id="admin-wallet-address" type="text" placeholder="0x…" spellcheck="false" autocomplete="off" required>
+              </p>
+              <p id="admin-wallet-status" class="help-text" role="status"></p>
+              <div class="actions">
+                <button id="admin-wallet-check" type="submit" class="secondary">Проверить</button>
+                <button id="admin-wallet-allow" type="button">Добавить</button>
+                <button id="admin-wallet-deny" type="button" class="secondary">Удалить</button>
+              </div>
+              <p class="help-text">Допуск действует в выбранном пуле. Отзыв допуска может задержать публикацию незакрытых операций этого кошелька.</p>
+            </fieldset>
+          </form>
+          <fieldset id="admin-pause-controls" disabled>
+            <legend>Пауза</legend>
+            <p id="admin-market-status" class="help-text" role="status"></p>
+            <button id="admin-market-toggle" type="button" class="secondary">Поставить рынок на паузу</button>
+            <p class="help-text">Пауза отключает пополнение, обмен и добавление ликвидности. Уже собранные пакеты могут ждать снятия паузы.</p>
+            <p id="admin-withdrawals-status" class="help-text" role="status"></p>
+            <div class="actions">
+              <button id="admin-withdrawals-ruba-toggle" type="button" class="secondary">Остановить вывод RUBA</button>
+              <button id="admin-withdrawals-usdt-toggle" type="button" class="secondary">Остановить вывод USDT</button>
+            </div>
+          </fieldset>
+        </div>
+      </section>
+
+      <section id="page-disclosure" data-page="disclosure" aria-labelledby="disclosure-title" inert hidden>
+        <div class="page-heading">
+          <h2 id="disclosure-title">Раскрытие сделки</h2>
+        </div>
+        <div id="disclosure-content"><p class="notice" role="status">Загрузка…</p></div>
+      </section>
+    </main>
+    <dialog id="operation-dialog" aria-labelledby="operation-dialog-title">
+      <h2 id="operation-dialog-title" tabindex="-1" autofocus>Ход операции</h2>
+      <p id="operation-dialog-status" role="status" aria-live="polite"></p>
+      <ol id="operation-dialog-steps" class="operation-steps" role="list"></ol>
+      <p id="operation-dialog-error" class="notice error" role="alert" hidden></p>
+      <div class="actions operation-dialog-actions">
+        <button id="operation-dialog-close" type="button" class="secondary">Закрыть</button>
+      </div>
+    </dialog>
+    <noscript>Для работы интерфейса включите JavaScript в браузере.</noscript>
+    <script type="importmap">{"imports":{"ethers":"/assets/ethers.js"}}</script>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

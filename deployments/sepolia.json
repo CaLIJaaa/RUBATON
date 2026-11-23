@@ -1,0 +1,125 @@
+{
+  "network": {
+    "name": "Sepolia",
+    "chainId": "11155111",
+    "identityCheckpoint": {
+      "kind": "finalized",
+      "blockNumber": 12190907,
+      "blockHash": "0xecb1a8bc95d6ee3b045a1861531b8b06a1a7230a2f057e1e1233ac45486b7a2b"
+    },
+    "genesisAvailability": "pruned",
+    "explorerUrl": "https://sepolia.etherscan.io",
+    "confirmations": 1
+  },
+  "status": "ready",
+  "checkedBlock": {
+    "number": 12191250,
+    "hash": "0xd168d86f4ee90c53e3f80dea290f00e7383064c3a745d5b83e974cd61f824ca4"
+  },
+  "admin": "0x268cBDa30Dd229E5F9b084609a2bb9b73b0f8aaD",
+  "roles": {
+    "lp": "0x39C4f1af111A4FB6A9d9AC5060aE56eE6d450185",
+    "bot": "0x5996A4Cd9Dc19Db279Cd9381C8126D8918B402aA",
+    "prover": "0xE032be96bf18AdDb2c6D896802EFE8E5d4C3544F"
+  },
+  "tokens": {
+    "RUBA": {
+      "address": "0xdd20FBD2d2b50A5220464f16EF95c796bEa19a24",
+      "symbol": "RUBA",
+      "decimals": 18,
+      "faucetAmount": "10000000000000000000000",
+      "name": "Demo RUBA",
+      "explorerUrl": "https://sepolia.etherscan.io/token/0xdd20FBD2d2b50A5220464f16EF95c796bEa19a24"
+    },
+    "USDT": {
+      "address": "0xB72e03942c6F89e59fDaC195676435fd37a8df55",
+      "symbol": "USDT",
+      "decimals": 6,
+      "faucetAmount": "10000000000",
+      "name": "Demo USDT",
+      "explorerUrl": "https://sepolia.etherscan.io/token/0xB72e03942c6F89e59fDaC195676435fd37a8df55"
+    },
+    "WETH": {
+      "address": "0x4Bcec574e9eBc27b88DC57Dfe23b0751066a9EB5",
+      "symbol": "WETH",
+      "decimals": 18,
+      "faucetAmount": "10000000000000000000",
+      "name": "Demo WETH",
+      "explorerUrl": "https://sepolia.etherscan.io/token/0x4Bcec574e9eBc27b88DC57Dfe23b0751066a9EB5"
+    },
+    "WBTC": {
+      "address": "0x854E36dC0ff315e4d6A2de42280Aa948aB7C59a7",
+      "symbol": "WBTC",
+      "decimals": 8,
+      "faucetAmount": "100000000",
+      "name": "Demo WBTC",
+      "explorerUrl": "https://sepolia.etherscan.io/token/0x854E36dC0ff315e4d6A2de42280Aa948aB7C59a7"
+    }
+  },
+  "pools": {
+    "ruba-usdt": {
+      "label": "RUBA / USDT",
+      "vault": "0xABdE043D079C0B8307df9aFf3114f4e824C949B3",
+      "assets": [
+        "RUBA",
+        "USDT"
+      ],
+      "seedAmounts": [
+        "3000000000000000000000",
+        "3000000000"
+      ],
+      "botAmounts": [
+        "3000000000000000000000",
+        "3000000000"
+      ],
+      "seedRoot": "0x1b3febe0d4963f8e1e84433d33fb2630cc82eb79a239665ce6126291b876bfc9",
+      "stateVersion": "3",
+      "stateRoot": "0x265ef6a8f459af2899dd66480f06b9de1cb6581ab805c0dc6aadc22686841cc3",
+      "explorerUrl": "https://sepolia.etherscan.io/address/0xABdE043D079C0B8307df9aFf3114f4e824C949B3"
+    },
+    "ruba-weth": {
+      "label": "RUBA / WETH",
+      "vault": "0xd600a6E14f3C33BC4c3A8725F70997D3c243D9A0",
+      "assets": [
+        "RUBA",
+        "WETH"
+      ],
+      "seedAmounts": [
+        "3000000000000000000000",
+        "1000000000000000000"
+      ],
+      "botAmounts": [
+        "3000000000000000000000",
+        "1000000000000000000"
+      ],
+      "seedRoot": "0x1a73cf88a42e80a90f1252f55c110f1147972b9c6a8083849b091648f630d810",
+      "stateVersion": "2",
+      "stateRoot": "0x1a73cf88a42e80a90f1252f55c110f1147972b9c6a8083849b091648f630d810",
+      "explorerUrl": "https://sepolia.etherscan.io/address/0xd600a6E14f3C33BC4c3A8725F70997D3c243D9A0"
+    },
+    "weth-wbtc": {
+      "label": "WETH / WBTC",
+      "vault": "0x8686eb07D17BB1C8cC11f756aFDc27A720d75045",
+      "assets": [
+        "WETH",
+        "WBTC"
+      ],
+      "seedAmounts": [
+        "3000000000000000000",
+        "10000000"
+      ],
+      "botAmounts": [
+        "3000000000000000000",
+        "10000000"
+      ],
+      "seedRoot": "0x144e8a98e61ece4c2d30edc7bb13b42951d8d5dd83ae53d30cdf1a94e59dbbf1",
+      "stateVersion": "2",
+      "stateRoot": "0x144e8a98e61ece4c2d30edc7bb13b42951d8d5dd83ae53d30cdf1a94e59dbbf1",
+      "explorerUrl": "https://sepolia.etherscan.io/address/0x8686eb07D17BB1C8cC11f756aFDc27A720d75045"
+    }
+  },
+  "shared": {
+    "verifier": "0xB6100413C765B798E638959c58F2E9fb2047aF38",
+    "poseidon": "0x381fE27b68c7A6247a3a1317f2D15c3fA5f9a0Fe"
+  }
+}

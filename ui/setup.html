@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Настройка Tenderly — RUBA</title>
+    <link rel="stylesheet" href="/styles.css">
+    <script type="module" src="/setup.js"></script>
+  </head>
+  <body>
+    <header class="app-header">
+      <h1>Настройка Tenderly</h1>
+      <p class="subtitle">Подготовка тестового RUBA / USDT</p>
+      <p class="page-description">Вставьте данные нового форка Ethereum mainnet. Приложение развернёт RUBA и хранилище, пополнит ваш кошелёк и подготовит ликвидность.</p>
+      <p class="help-text">Сервер запускается один раз командой <code>npm run tenderly</code>. Следующие форки можно подключать на этой странице.</p>
+      <p class="help-text">Первичная подготовка может занять несколько минут. Ход выполнения появится ниже.</p>
+      <p class="notice">Подготовка нового форка обычно занимает 2 транзакции: если лимит 20 ещё не использован, останется 18 для тестирования. Точный режим подготовки появится в ходе выполнения. Повторный запуск подготовленного этим способом форка с тем же кошельком не отправляет новых транзакций.</p>
+    </header>
+
+    <main>
+      <form id="setup-form">
+        <fieldset id="setup-fields">
+          <legend>Новый форк</legend>
+          <p>
+            <label for="setup-admin-rpc">Admin RPC</label>
+            <input id="setup-admin-rpc" name="rpcUrl" type="password" autocomplete="off" spellcheck="false" required placeholder="https://virtual.mainnet…rpc.tenderly.co/…">
+          </p>
+          <p class="help-text">Скопируйте Admin RPC из Tenderly. Он нужен серверу для выдачи тестовых токенов. Приватный ключ вашего кошелька не нужен.</p>
+          <p>
+            <label for="setup-public-rpc">Public RPC для кошелька, необязательно</label>
+            <input id="setup-public-rpc" name="publicRpcUrl" type="url" autocomplete="off" spellcheck="false" placeholder="Public RPC того же форка">
+          </p>
+          <p class="help-text">Admin и Public RPC должны относиться к одному форку. Используйте отдельный Chain ID, например 73571, а не Ethereum mainnet 1.</p>
+          <p>
+            <label for="setup-wallet">Адрес кошелька для тестирования</label>
+            <input id="setup-wallet" name="testWalletAddress" type="text" autocomplete="off" spellcheck="false" required placeholder="0x…" pattern="0x[a-fA-F0-9]{40}">
+          </p>
+          <p class="help-text">На этот адрес поступят тестовые ETH, RUBA и USDT. Он также получит доступ к обмену и пулу.</p>
+
+          <details>
+            <summary>Суммы токенов и начальная ликвидность</summary>
+            <p>При первой подготовке баланс кошелька пополнится до указанных сумм. Начальная ликвидность создаётся один раз для нового рынка.</p>
+            <div class="forms-grid">
+              <div>
+                <p><label for="setup-wallet-eth">ETH на кошельке</label><input id="setup-wallet-eth" name="walletEth" type="text" inputmode="decimal" value="10" required></p>
+                <p><label for="setup-wallet-ruba">RUBA на кошельке</label><input id="setup-wallet-ruba" name="walletRuba" type="text" inputmode="decimal" value="10000" required></p>
+                <p><label for="setup-wallet-usdt">USDT на кошельке</label><input id="setup-wallet-usdt" name="walletUsdt" type="text" inputmode="decimal" value="10000" required></p>
+              </div>
+              <div>
+                <p><label for="setup-seed-ruba">RUBA в начальном пуле</label><input id="setup-seed-ruba" name="seedRuba" type="text" inputmode="decimal" value="1000" required></p>
+                <p><label for="setup-seed-usdt">USDT в начальном пуле</label><input id="setup-seed-usdt" name="seedUsdt" type="text" inputmode="decimal" value="1000" required></p>
+              </div>
+            </div>
+          </details>
+          <button id="setup-submit" type="submit" disabled>Подготовить и запустить</button>
+        </fieldset>
+      </form>
+
+      <section class="panel withdrawals-panel" aria-labelledby="setup-progress-title">
+        <h2 id="setup-progress-title">Состояние настройки</h2>
+        <p id="setup-status" class="notice" role="status" aria-live="polite">Подключаюсь к серверу настройки…</p>
+        <p id="setup-error" class="notice error" role="alert" hidden></p>
+        <ol id="setup-log" aria-label="Ход настройки"></ol>
+        <div class="actions">
+          <button id="setup-refresh" type="button" class="secondary">Обновить статус</button>
+          <button id="setup-resume" type="button" class="secondary" hidden disabled>Запустить предыдущий форк</button>
+        </div>
+      </section>
+
+      <section id="setup-result" class="panel withdrawals-panel" aria-labelledby="setup-result-title" hidden>
+        <h2 id="setup-result-title">Форк готов</h2>
+        <dl class="connection-info">
+          <div><dt>Chain ID</dt><dd id="setup-chain-id">—</dd></div>
+          <div><dt>Кошелёк</dt><dd id="setup-result-wallet">—</dd></div>
+          <div><dt>RubaVault</dt><dd id="setup-vault">—</dd></div>
+          <div><dt>RUBA</dt><dd id="setup-ruba">—</dd></div>
+          <div><dt>USDT</dt><dd id="setup-usdt">—</dd></div>
+          <div><dt>Public RPC</dt><dd id="setup-result-rpc">Скопируйте из Tenderly для этого форка.</dd></div>
+        </dl>
+        <p class="help-text">Добавьте эту сеть в MetaMask или Rabby, затем откройте обмен и подключите указанный кошелёк.</p>
+        <p><a id="setup-open-app" href="/">Открыть обмен</a></p>
+      </section>
+      <noscript>Для настройки форка включите JavaScript.</noscript>
+    </main>
+  </body>
+</html>

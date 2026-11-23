@@ -1,0 +1,62 @@
+{
+  "name": "ruba-mvp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "sepolia:prepare": "node tools/run.cjs sepolia:prepare",
+    "sepolia:deploy": "node tools/run.cjs sepolia:deploy",
+    "sepolia:budget": "node tools/run.cjs sepolia:budget",
+    "sepolia:start": "node tools/run.cjs sepolia:start",
+    "markets:dev": "node tools/run.cjs markets:dev",
+    "test:markets:integration": "node tools/run.cjs test:markets:integration",
+    "zk:build": "node tools/run.cjs zk:build",
+    "test:zk": "node tools/run.cjs test:zk",
+    "zk:dev": "node tools/run.cjs zk:dev",
+    "zk:demo": "node tools/run.cjs zk:demo",
+    "test:zk:integration": "node tools/run.cjs test:zk:integration",
+    "dev:legacy": "node tools/run.cjs dev:legacy",
+    "test": "npm run typecheck && npm run test:runtime && npm run test:server && npm run test:scripts && npm run test:ui && npm run test:contracts && npm run test:zk",
+    "doctor": "node tools/run.cjs doctor",
+    "typecheck": "node tools/run.cjs typecheck",
+    "test:runtime": "node tools/run.cjs test:runtime",
+    "test:server": "node tools/run.cjs test:server",
+    "test:scripts": "node tools/run.cjs test:scripts",
+    "test:ui": "npm run build:ui && node tools/run.cjs test:ui",
+    "test:contracts": "node tools/run.cjs test:contracts",
+    "build:contracts": "node tools/run.cjs build:contracts",
+    "start": "node tools/run.cjs start",
+    "dev": "node tools/run.cjs dev",
+    "test:integration": "node tools/run.cjs test:integration",
+    "test:tenderly": "node tools/run.cjs test:tenderly",
+    "demo": "node tools/run.cjs demo",
+    "tenderly": "node tools/run.cjs tenderly",
+    "tenderly:direct": "node tools/run.cjs tenderly:direct",
+    "tenderly:setup": "node tools/run.cjs tenderly:setup",
+    "tenderly:fund": "node tools/run.cjs tenderly:fund",
+    "build:ui": "node scripts/build-wallet.mjs"
+  },
+  "dependencies": {
+    "@web3-onboard/core": "2.24.1",
+    "@web3-onboard/injected-wallets": "2.11.3",
+    "ethers": "6.15.0",
+    "snarkjs": "0.7.6"
+  },
+  "devDependencies": {
+    "circom2": "0.2.23",
+    "circomlib": "2.0.5",
+    "circomlibjs": "0.1.7",
+    "esbuild": "0.28.2",
+    "solc": "0.8.26",
+    "typescript": "5.9.2"
+  },
+  "overrides": {
+    "joi": "17.13.9",
+    "nanoid": "5.1.16",
+    "ws": "8.21.0",
+    "crypto-es": "2.1.0"
+  }
+}

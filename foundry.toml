@@ -1,0 +1,25 @@
+[profile.default]
+src = "src"
+test = "test"
+script = "script"
+out = "out"
+libs = ["lib"]
+solc = "./tools/solcjs-wrapper.cjs"
+auto_detect_solc = false
+offline = true
+optimizer = true
+optimizer_runs = 200
+evm_version = "cancun"
+fs_permissions = [{ access = "read", path = "./lib/uniswap-v2-core/build" }]
+
+[profile.default.fuzz]
+runs = 256
+
+[fmt]
+line_length = 110
+tab_width = 4
+bracket_spacing = false
+
+[rpc_endpoints]
+# Used only by the Tenderly launcher. Can also be replaced with your virtual RPC URL.
+mainnet = "${TENDERLY_RPC_URL}"

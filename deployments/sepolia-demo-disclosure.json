@@ -1,0 +1,52 @@
+{
+  "format": "ruba-trade-disclosure",
+  "version": 2,
+  "receipt": {
+    "chainId": "11155111",
+    "vault": "0xABdE043D079C0B8307df9aFf3114f4e824C949B3",
+    "tradeId": "1",
+    "account": "0x5996A4Cd9Dc19Db279Cd9381C8126D8918B402aA",
+    "tokenIn": "0xB72e03942c6F89e59fDaC195676435fd37a8df55",
+    "tokenOut": "0xdd20FBD2d2b50A5220464f16EF95c796bEa19a24",
+    "amountIn": "18549386",
+    "amountOut": "18380430222679530360",
+    "feeNumerator": "55648158",
+    "feeDenominator": "1000",
+    "reserveRubaBefore": "3000000000000000000000",
+    "reserveUsdtBefore": "3000000000",
+    "reserveRubaAfter": "2981619569777320469640",
+    "reserveUsdtAfter": "3018549386",
+    "salt": "0x03d7cbd70d971306d7122dcfe5cbd1974c90e4672e415fd272e5910817b0881f",
+    "leaf": "0x1d72148f58be8ba041c89a28c1d4b036e428863666869405fdb176d3b8c3f2a8",
+    "version": 2,
+    "schemaVersion": 2,
+    "batchId": "1",
+    "proof": [
+      "0x20ff3ae41f13b41aa9d00189e6a4541b342d771eaa360b97e8164e65480567db",
+      "0x034394ba956ee8cd60786d236866faf25ec59fecfb0beaf9f0737da2f66c9098"
+    ]
+  },
+  "batch": {
+    "version": 2,
+    "stateVersion": "3",
+    "batchId": "1",
+    "previousStateRoot": "0x1b3febe0d4963f8e1e84433d33fb2630cc82eb79a239665ce6126291b876bfc9",
+    "newStateRoot": "0x265ef6a8f459af2899dd66480f06b9de1cb6581ab805c0dc6aadc22686841cc3",
+    "receiptsRoot": "0x23e13dc02d12710fd6d33344140ed663b5c30a0d841265e891f085af7875df40",
+    "firstTradeId": "1",
+    "tradeCount": "4",
+    "publishedTxHash": "0x83686e3ad5e7f3a8d22706cc1ebb0921e6e2eef94c502848d9c5bda7388041f2"
+  },
+  "tokens": {
+    "RUBA": {
+      "address": "0xdd20FBD2d2b50A5220464f16EF95c796bEa19a24",
+      "decimals": 18,
+      "symbol": "RUBA"
+    },
+    "USDT": {
+      "address": "0xB72e03942c6F89e59fDaC195676435fd37a8df55",
+      "decimals": 6,
+      "symbol": "USDT"
+    }
+  }
+}
