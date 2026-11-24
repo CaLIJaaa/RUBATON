@@ -127,7 +127,7 @@ export class RubaEngine {
     return { address: account, balances: state.balances[account] };
   }
   private debit(balances: TokenAmounts, token: Token, amount: bigint): void {
-    if (balances[token] < amount) throw new Error(`Insufficient ${token} balance`);
+    if (balances[token] < amount) throw new Error(`Insufficient ${token} balance (required ${amount}, available ${balances[token]})`);
     balances[token] -= amount;
   }
   getActionNonce(account: string): bigint { return this.read().actionNonces[getAddress(account)] ?? 0n; }

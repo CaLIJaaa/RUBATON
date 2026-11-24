@@ -228,7 +228,7 @@ test('controller confirms entry without a wallet, gates operations and rejects s
     async setTokenWithdrawalsPaused(token, paused) {
       return vaultAdminWrite(this.config.vaultAddress, { kind: 'withdrawals', token, paused }, (policy) => { policy.withdrawalsPaused[token] = paused; });
     }
-    async getWalletBalances() { walletBalanceReads += 1; return { RUBA: 100n, USDT: 10n }; }
+    async getWalletBalances() { walletBalanceReads += 1; return { RUBA: 100n * 10n ** 18n, USDT: 10n * 10n ** BigInt(this.config.tokens.USDT.decimals) }; }
     async getAccount() {
       privateReads += 1;
       if (deferredAccount) return deferredAccount;
@@ -913,13 +913,44 @@ test('controller confirms entry without a wallet, gates operations and rejects s
 
   let removeRequests = 0;
   const previousAction = RubaClient.prototype.signedAction;
+  const additions = [];
+  let rejectLiquidity = false;
   RubaClient.prototype.signedAction = async function(operation) {
+    if (operation.kind === 'addLiquidity') {
+      additions.push(structuredClone(operation));
+      if (rejectLiquidity) throw new Error('Insufficient USDT balance (required 150000000, available 125000000)');
+      return { rubaAmount: '1000000000000000000', usdtAmount: '50000000', shares: '1000' };
+    }
     if (operation.kind === 'removeLiquidity') { removeRequests++; return { rubaAmount: '1', usdtAmount: '1', closedThroughStateVersion: '10' }; }
     return previousAction.call(this, operation);
   };
+  assert.equal(element('liquidity-available-ruba').textContent, '1 WETH');
+  assert.equal(element('liquidity-available-usdt').textContent, '1.25 WBTC');
+  element('liquidity-ruba').value = '1000';
+  element('liquidity-usdt').value = '1000';
+  await element('liquidity-add-form').fire('submit');
+  assert.equal(additions.length, 0, 'two unaffordable maxima must fail before requesting a signature');
+  assert.match(element('operation-dialog-error').textContent, /1 WETH и 1\.25 WBTC.*Мой баланс/);
+  element('liquidity-ruba').value = '1';
+  await element('liquidity-add-form').fire('submit');
+  assert.equal(additions.length, 1, 'the unused part of one large maximum can be left on the internal balance');
+  assert.match(element('status').textContent, /1 WETH и 0\.5 WBTC.*опубликуйте/);
+  rejectLiquidity = true;
+  await element('liquidity-add-form').fire('submit');
+  assert.equal(additions.length, 2);
+  assert.match(element('error').textContent, /не хватает WBTC.*нужно 1\.5 WBTC, доступно 1\.25 WBTC/i);
+  await protectedNavigation.find((anchor) => anchor.dataset.route === 'account').fire('click');
+  assert.equal(element('error').textContent, '', 'a previous form error must not look like a failure of the new section');
+  assert.match(element('operation-dialog-error').textContent, /не хватает WBTC/, 'the operation dialog retains the error details');
+  await protectedNavigation.find((anchor) => anchor.dataset.route === 'liquidity').fire('click');
+
   const exitOffer = readyOffer('0'); exitOffer.request.kind = 'zk'; exitOffer.request.batch.tradeCount = '0';
   exitOffer.request.publicSignals = ['1', '10', '0', '3', '4', '0', '0', '20', '20', '0', '6', '7', '8'];
   publicationOffer = exitOffer;
+  element('liquidity-shares').value = '1';
+  await element('liquidity-remove-form').fire('submit');
+  assert.equal(removeRequests, 0);
+  assert.match(element('error').textContent, /Доступно 0\.000000000000001 LP-долей/);
   element('liquidity-shares').value = '0.000000000000001';
   await element('liquidity-remove-form').fire('submit');
   assert.equal(removeRequests, 1);

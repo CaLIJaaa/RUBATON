@@ -206,6 +206,19 @@ function pairLabel() { return `${symbol('RUBA')} / ${symbol('USDT')}`; }
 function enteredAmount(id, token, allowZero = false) {
   return parseAmount(element(id).value.trim() || (allowZero ? '0' : ''), tokenDecimals(token), { allowZero });
 }
+function tokenAmount(token, value) { return `${amount(token, value)} ${symbol(token)}`; }
+function insufficientExchangeBalance(token, required, available) {
+  const details = required === undefined ? '' : ` Нужно ${tokenAmount(token, required)}, доступно ${tokenAmount(token, available)}.`;
+  return `На балансе обменника не хватает ${symbol(token)}.${details} Уменьшите сумму или пополните баланс в разделе «Мой баланс».`;
+}
+function requireExchangeBalance(token, required) {
+  const available = BigInt(state.snapshot.balances[token]);
+  if (required > available) throw new Error(insufficientExchangeBalance(token, required, available));
+}
+function operationErrorMessage(error) {
+  const balance = /^Insufficient (RUBA|USDT) balance(?: \(required (\d+), available (\d+)\))?$/.exec(error?.message ?? '');
+  return balance && state.config ? insufficientExchangeBalance(balance[1], balance[2], balance[3]) : errorMessage(error);
+}
 function newActivityAllowed() {
   return Boolean(state.market?.whitelisted && !state.market.marketPaused);
 }
@@ -480,10 +493,12 @@ function renderAccount() {
   for (const token of ['RUBA', 'USDT']) {
     const suffix = token.toLowerCase();
     element(`internal-${suffix}`).textContent = state.snapshot ? amount(token, state.snapshot.balances[token]) : '—';
+    element(`liquidity-available-${suffix}`).textContent = state.snapshot ? tokenAmount(token, state.snapshot.balances[token]) : '—';
     element(`wallet-${suffix}`).textContent = state.walletBalances ? amount(token, state.walletBalances[token]) : '—';
     const pending = state.snapshot?.withdrawals.filter((record) => record.token === token && record.status === 'pending') ?? [];
     element(`pending-${suffix}`).textContent = state.snapshot ? amount(token, pending.reduce((total, record) => total + BigInt(record.amount), 0n)) : '—';
   }
+  renderSwapBalance();
   element('lp-shares').textContent = state.snapshot ? formatAmount(state.snapshot.lpShares, 18) : '—';
   element('withdrawal-help').textContent = provenWithdrawals()
     ? 'Сохранённые доказанные права бессрочны. Запрос на вывод закрывает неполный пакет. Продолжите публикацию и выплату из списка, не создавая новое резервирование.'
@@ -493,6 +508,11 @@ function renderAccount() {
     ? `${proof.registered ? 'Баланс зарегистрирован.' : 'Баланс ещё не зарегистрирован.'} ${proof.verified ? 'Merkle proof соответствует текущему принятому корню Vault.' : 'Предварительное состояние сервера: ZK-публикация ещё не подтверждена.'} Версия: ${proof.stateVersion}. Корень: ${proof.stateRoot}.`
     : `Загрузите доказательство своего баланса. Суммы скрыты от блокчейна; адрес владельца публичен. ${provenWithdrawals() ? 'Выплата основана на доказанном резервировании без разрешения оператора. Для нового proof нужен prover; автономного аварийного выхода нет.' : 'Вывод по-прежнему требует разрешения оператора.'}`;
   renderWithdrawals();
+}
+
+function renderSwapBalance() {
+  const token = element('swap-token-in').value;
+  element('swap-available').textContent = state.snapshot && (token === 'RUBA' || token === 'USDT') ? tokenAmount(token, state.snapshot.balances[token]) : '—';
 }
 
 function renderWallet() {
@@ -568,7 +588,7 @@ async function run(label, operation, requireReady = true, wallet) {
     await operation(version);
   } catch (error) {
     if (!(error instanceof SessionChanged) && version === state.version) {
-      setError(errorMessage(error));
+      setError(operationErrorMessage(error));
       if (error?.uncertain === true) {
         state.needsRefresh = true;
         invalidateQuote();
@@ -1072,6 +1092,7 @@ for (const id of ['swap-token-in', 'swap-amount', 'swap-slippage']) {
   element(id).addEventListener('input', invalidateQuote);
   element(id).addEventListener('change', invalidateQuote);
 }
+element('swap-token-in').addEventListener('change', renderSwapBalance);
 
 element('quote-swap').addEventListener('click', () => runWallet('Расчёт обмена', 'Готовим запрос котировки…', [
   checklist('sign:quote', 'Подписать запрос котировки'),
@@ -1110,6 +1131,7 @@ element('swap-form').addEventListener('submit', (event) => {
     if (!balanceReady() || !registeredAccount() || !newActivityAllowed()) throw new Error('Загрузите доступный баланс выбранного пула перед обменом.');
     const quote = state.quote;
     if (!quote || Date.now() - quote.createdAt > 120_000) { invalidateQuote(); throw new Error('Получите свежую котировку.'); }
+    requireExchangeBalance(quote.tokenIn, quote.amountIn);
     const receipt = await state.client.signedAction({ kind: 'swap', tokenIn: quote.tokenIn, amountIn: quote.amountIn.toString(), minOut: quote.minOut.toString() });
     guard(version);
     state.lastReceipt = receipt;
@@ -1410,22 +1432,40 @@ element('receipt-download').addEventListener('click', () => {
 element('liquidity-add-form').addEventListener('submit', (event) => {
   event.preventDefault();
   void runWallet('Добавление ликвидности', 'Проверяем суммы и баланс…', [
+    checklist('check:liquidity-balance', 'Проверить суммы и баланс обменника'),
     ...(isZk() ? proofChecklist() : []),
     checklist('sign:addLiquidity', 'Подписать добавление ликвидности'),
     ...balanceChecklist(),
   ], async (version) => {
+    const report = checklistReporter('check:liquidity-balance', 'check', 'Проверить суммы и баланс обменника');
+    report('start');
     if (!balanceReady() || !registeredAccount() || !newActivityAllowed()) throw new Error('Загрузите доступный баланс выбранного пула перед добавлением ликвидности.');
+    const rubaDesired = enteredAmount('liquidity-ruba', 'RUBA');
+    const usdtDesired = enteredAmount('liquidity-usdt', 'USDT');
+    const rubaMin = enteredAmount('liquidity-ruba-min', 'RUBA', true);
+    const usdtMin = enteredAmount('liquidity-usdt-min', 'USDT', true);
+    if (rubaMin > rubaDesired || usdtMin > usdtDesired) throw new Error('Минимальная сумма токена не может превышать желаемую.');
+    const { RUBA: ruba, USDT: usdt } = state.snapshot.balances;
+    // The AMM uses the full desired amount of one token and may use less of the other.
+    // With both maxima above the balance, there is no feasible pair at any pool ratio.
+    if (rubaDesired > BigInt(ruba) && usdtDesired > BigInt(usdt)) {
+      throw new Error(`На балансе обменника доступно ${tokenAmount('RUBA', ruba)} и ${tokenAmount('USDT', usdt)}. Уменьшите суммы или пополните баланс в разделе «Мой баланс».`);
+    }
+    requireExchangeBalance('RUBA', rubaMin || 1n);
+    requireExchangeBalance('USDT', usdtMin || 1n);
+    report('done');
     const operation = {
       kind: 'addLiquidity',
-      rubaDesired: enteredAmount('liquidity-ruba', 'RUBA').toString(),
-      usdtDesired: enteredAmount('liquidity-usdt', 'USDT').toString(),
-      rubaMin: enteredAmount('liquidity-ruba-min', 'RUBA', true).toString(),
-      usdtMin: enteredAmount('liquidity-usdt-min', 'USDT', true).toString(),
+      rubaDesired: rubaDesired.toString(), usdtDesired: usdtDesired.toString(),
+      rubaMin: rubaMin.toString(), usdtMin: usdtMin.toString(),
     };
     const result = await state.client.signedAction(operation);
     guard(version);
     invalidateQuote();
-    await refreshAfterSuccess(version, `В пул внесено ${amount('RUBA', result.rubaAmount)} ${symbol('RUBA')} и ${amount('USDT', result.usdtAmount)} ${symbol('USDT')}. Получено ${formatAmount(result.shares, 18)} LP-долей.`);
+    const amounts = `${tokenAmount('RUBA', result.rubaAmount)} и ${tokenAmount('USDT', result.usdtAmount)}. LP-доли: ${formatAmount(result.shares, 18)}.`;
+    await refreshAfterSuccess(version, isZk()
+      ? `Внесение рассчитано: ${amounts} Для подтверждения в блокчейне опубликуйте готовый переход в разделе «Обмен».`
+      : `В пул внесено ${amounts}`);
   });
 });
 
@@ -1438,9 +1478,12 @@ element('liquidity-remove-form').addEventListener('submit', (event) => {
     ...balanceChecklist(),
   ], async (version) => {
     if (!balanceReady() || !registeredAccount()) throw new Error('Загрузите баланс выбранного пула перед снятием ликвидности.');
+    const shares = parseAmount(element('liquidity-shares').value, 18);
+    const available = BigInt(state.snapshot.lpShares);
+    if (shares > available) throw new Error(`Доступно ${formatAmount(available, 18)} LP-долей. Уменьшите сумму снятия.`);
     const result = await state.client.signedAction({
       kind: 'removeLiquidity',
-      shares: parseAmount(element('liquidity-shares').value, 18).toString(),
+      shares: shares.toString(),
       rubaMin: enteredAmount('liquidity-remove-ruba-min', 'RUBA', true).toString(),
       usdtMin: enteredAmount('liquidity-remove-usdt-min', 'USDT', true).toString(),
     });
@@ -1478,6 +1521,10 @@ element('deposit-form').addEventListener('submit', (event) => {
   ], async (version) => {
     if (!balanceReady() || !fundingAllowed()) throw new Error('Загрузите доступный баланс выбранного пула перед пополнением.');
     const value = enteredAmount('deposit-amount', token);
+    const available = state.walletBalances?.[token];
+    if (available !== undefined && value > BigInt(available)) {
+      throw new Error(`Для пополнения нужно ${tokenAmount(token, value)}. В кошельке доступно ${tokenAmount(token, available)}. Уменьшите сумму или получите тестовые токены.`);
+    }
     await state.client.deposit(token, value, (message) => { if (version === state.version) setStatus(message); });
     guard(version);
     await refreshAfterSuccess(version, 'Транзакция пополнения подтверждена в сети.');
@@ -1498,6 +1545,7 @@ element('withdraw-form').addEventListener('submit', (event) => {
     if (!balanceReady() || !registeredAccount()) throw new Error('Загрузите баланс выбранного пула перед выводом.');
     if (state.market.withdrawalsPaused[token]) throw new Error(`Вывод ${symbol(token)} приостановлен.`);
     const value = enteredAmount('withdraw-amount', token);
+    requireExchangeBalance(token, value);
     const ticket = await client.signedAction({ kind: 'withdraw', token, amount: value.toString() });
     guard(version);
     // Reservation is already durable. If the wallet transaction is cancelled,
@@ -1863,7 +1911,14 @@ element('faucet-submit').addEventListener('click', () => runWallet(`Получе
   setStatus(`Получено ${amount(token, result.amount)} тестовых ${symbol(token)} в кошелёк. Пополните выбранный Vault отдельно; кран доступен раз в 60 секунд.`);
 }));
 
-window.addEventListener('hashchange', route);
+window.addEventListener('hashchange', () => {
+  const previousPage = state.page;
+  route();
+  if (state.page !== previousPage && !state.busy && element('error').textContent) {
+    setError();
+    setStatus();
+  }
+});
 
 renderAccount();
 renderWallet();

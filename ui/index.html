@@ -75,6 +75,7 @@
                   <p>
                     <label for="swap-amount">Сколько отдаёте</label>
                     <input id="swap-amount" name="amount" type="text" inputmode="decimal" placeholder="0" autocomplete="off" required>
+                    <small class="help-text">В обменнике: <span id="swap-available">—</span></small>
                   </p>
                   <p>
                     <label for="swap-token-in">Токен</label>
@@ -216,7 +217,7 @@
         <div class="page-heading">
           <div>
             <h2 id="liquidity-title">Пул ликвидности</h2>
-            <p class="page-description">Чтобы внести ликвидность, пополните баланс обменника обоими токенами.</p>
+            <p class="page-description">Ликвидность вносится с баланса обменника. <a href="#/account">Пополнить баланс</a></p>
           </div>
           <div class="pool-summary">
             <p><span class="help-text">Ваши LP-доли</span><output id="lp-shares">—</output></p>
@@ -229,11 +230,13 @@
               <legend>Добавить ликвидность</legend>
               <p>
                 <label for="liquidity-ruba">Сумма <span data-token-symbol="RUBA">RUBA</span></label>
-                <input id="liquidity-ruba" name="rubaDesired" type="text" inputmode="decimal" placeholder="0" autocomplete="off" required>
+                <input id="liquidity-ruba" name="rubaDesired" type="text" inputmode="decimal" placeholder="0" autocomplete="off" aria-describedby="liquidity-available-ruba" required>
+                <small class="help-text">В обменнике: <span id="liquidity-available-ruba">—</span></small>
               </p>
               <p>
                 <label for="liquidity-usdt">Сумма <span data-token-symbol="USDT">USDT</span></label>
-                <input id="liquidity-usdt" name="usdtDesired" type="text" inputmode="decimal" placeholder="0" autocomplete="off" required>
+                <input id="liquidity-usdt" name="usdtDesired" type="text" inputmode="decimal" placeholder="0" autocomplete="off" aria-describedby="liquidity-available-usdt" required>
+                <small class="help-text">В обменнике: <span id="liquidity-available-usdt">—</span></small>
               </p>
               <p class="help-text">Токены вносятся в пропорции пула. Остаток сохранится на балансе.</p>
               <details>

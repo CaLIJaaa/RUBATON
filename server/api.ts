@@ -315,7 +315,7 @@ export class RubaApi {
         const batchId = uint(disclosureBatch[1], 'batchId');
         if (batchId === 0n || !this.engine.getBatch(batchId)) throw new HttpError(404, 'Batch not found');
         // Public data only. Never include account receipts or state preimages.
-        const publication = await this.serial(() => this.chain.getDisclosureBatch(batchId));
+        const publication = await this.chain.getDisclosureBatch(batchId);
         if (!publication) throw new HttpError(404, 'Batch not found');
         send(200, { ...publication, tokens: this.publicConfig().tokens, ...(this.config.proofMode === 'zk' ? { proofMode: 'zk' } : {}) });
         return;

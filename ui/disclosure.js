@@ -141,7 +141,7 @@ export function createDisclosurePage(container, fetchImpl = globalThis.fetch.bin
         byId('disclosure-pair').textContent = `${tokens ? `${tokens.RUBA.symbol} / ${tokens.USDT.symbol}` : 'Рынок'} · ${market.label ?? market.id}`;
         if (exchangeLink) exchangeLink.href = `/?market=${encodeURIComponent(market.id)}`;
       }
-      const response = await fetchImpl(`${prefix}/disclosure/batches/${inspection.bundle.batch.batchId}`, { ...options, signal: AbortSignal.timeout(15_000) });
+      const response = await fetchImpl(`${prefix}/disclosure/batches/${inspection.bundle.batch.batchId}`, { ...options, signal: AbortSignal.timeout(30_000) });
       const body = await response.json();
       if (revision !== requestRevision) return;
       if (!response.ok) throw new Error(body.error ?? 'Не удалось получить данные публикации.');
@@ -156,7 +156,9 @@ export function createDisclosurePage(container, fetchImpl = globalThis.fetch.bin
         byId('disclosure-token-notice').textContent = 'Адреса, названия и точность токенов сверены с соответствующим Vault.';
       }
     } catch (error) {
-      if (revision === requestRevision) setNotice(byId('disclosure-chain'), `Публикация не подтверждена: ${error.message}`, true);
+      const detail = error.name === 'TimeoutError' ? 'Сервер или RPC не ответил вовремя. Повторите сверку через несколько секунд.'
+        : /Failed to fetch|fetch failed/i.test(error.message) ? 'Не удалось связаться с сервером. Проверьте подключение и повторите.' : error.message;
+      if (revision === requestRevision) setNotice(byId('disclosure-chain'), `Публикация не подтверждена: ${detail}`, true);
     } finally {
       if (revision === requestRevision) byId('disclosure-publication').disabled = false;
     }

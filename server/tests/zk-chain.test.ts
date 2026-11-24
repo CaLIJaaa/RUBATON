@@ -31,7 +31,7 @@ function fixture() {
   const state = {
     version: 0n, confirmedVersion: 0n, root: 100n, cursor: 0n, inboxCount: 0n, capacity: true,
     head: undefined as any, transitions: [] as any[], accepted: 0n, acceptedRoot: 100n,
-    proofCalls: 0, signatureEpoch: 1n, applied: [] as any[], logs: [] as any[],
+    proofCalls: 0, signatureEpoch: 1n, applied: [] as any[], logs: [] as any[], logQueries: 0,
     inbox: new Map<bigint, any>(), receipts: new Map<string, any>(), changed: false,
   };
   const abi = new Interface(VAULT_ABI), zkAbi = new Interface(ZK_VAULT_ABI);
@@ -46,6 +46,7 @@ function fixture() {
       const accepted = state.transitions.find((transition) => transition.stateVersion === state.accepted);
       const nextTradeId = accepted ? accepted.publicSignals[SIGNAL.newTradeId] : 1n;
       return { stateVersion: state.accepted, root: state.acceptedRoot, inboxCursor: 0n, nextTradeId,
+        txHash: accepted?.txHash, blockNumber: accepted?.blockNumber,
         tradeBatchId: BigInt(state.transitions.filter((transition) => transition.stateVersion <= state.accepted && transition.publicSignals[SIGNAL.mode] === 1n).length) };
     },
     getCurrentInboxCursor: () => state.cursor,
@@ -54,13 +55,19 @@ function fixture() {
     getBatchProgress: () => ({ collected: 0, required: 4 as const }),
     markTransitionAccepted(version: bigint, transactionHash: string, blockNumber: number) {
       assert.equal(blockNumber, 10); assert.equal(transactionHash, hash(900 + Number(version)));
-      state.accepted = version; state.acceptedRoot = state.transitions.find((transition) => transition.stateVersion === version).publicSignals[SIGNAL.newRoot];
+      const accepted = state.transitions.find((transition) => transition.stateVersion === version);
+      accepted.txHash = transactionHash;
+      accepted.blockNumber = blockNumber;
+      state.accepted = version; state.acceptedRoot = accepted.publicSignals[SIGNAL.newRoot];
       if (state.head?.stateVersion === version) state.head = undefined;
     },
   } as unknown as ZkRubaEngine;
   const provider = {
     async getBlock(tag: string | number) { const number = tag === 'latest' ? 20 : Number(tag); return { number, timestamp: 1000 + number, hash: hash(number + (state.changed ? 100 : 0)) }; },
-    async getLogs(filter: any) { return state.logs.filter((log) => log.blockNumber >= filter.fromBlock && log.blockNumber <= filter.toBlock && filter.topics.every((topic: string, index: number) => topic === log.topics[index])); },
+    async getLogs(filter: any) {
+      state.logQueries++;
+      return state.logs.filter((log) => log.blockNumber >= filter.fromBlock && log.blockNumber <= filter.toBlock && filter.topics.every((topic: string, index: number) => topic === log.topics[index]));
+    },
     async getTransactionReceipt(transactionHash: string) { return state.receipts.get(transactionHash) ?? null; },
   };
   const zkVault = {
@@ -220,11 +227,15 @@ test('ZK observer waits for finality and accepts only the real successful matchi
     f.state.confirmedVersion = 1n;
     await f.chain.publishPendingBatches();
     assert.equal(f.state.accepted, 1n);
+    const logQueries = f.state.logQueries;
     const disclosed = await f.chain.getDisclosureBatch(1n);
     assert.equal(disclosed?.status, 'published');
     assert.equal(disclosed?.batch.publishedTxHash, hash(901));
     assert.equal((disclosed as any).schemaVersion, 2);
     assert.equal((await f.chain.getPublicationRequest()).status, 'idle');
+    assert.equal(f.state.logQueries, logQueries, 'a confirmed batch uses the saved transaction instead of rescanning historical logs');
+    f.state.receipts.get(hash(901)).logs = [];
+    await assert.rejects(f.chain.getDisclosureBatch(1n), /publication event was not found/);
   } finally { f.close(); }
 });
 

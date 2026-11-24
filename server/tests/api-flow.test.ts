@@ -108,6 +108,12 @@ test('signed API flow conserves custody, batches receipts and reserves one-use w
       kind: 'addLiquidity', rubaDesired: parseUnits('1000', 18).toString(), usdtDesired: parseUnits('1000', 6).toString(),
       rubaMin: '0', usdtMin: '0',
     });
+    const unfundedLp = engine.accountSnapshot(trader.address);
+    const lpAttempt = { kind: 'addLiquidity' as const, rubaDesired: parseUnits('101', 18).toString(), usdtDesired: parseUnits('101', 6).toString(), rubaMin: '0', usdtMin: '0' };
+    const fundingNonce = engine.getActionNonce(trader.address);
+    await assert.rejects(act(trader, lpAttempt), /Insufficient RUBA balance \(required 101000000000000000000, available 100000000000000000000\)/);
+    assert.deepEqual(engine.accountSnapshot(trader.address), unfundedLp);
+    assert.equal(engine.getActionNonce(trader.address), fundingNonce);
     const initial = engine.snapshot();
     const first = await request(trader, { kind: 'swap', tokenIn: 'RUBA', amountIn: parseUnits('10', 18).toString(), minOut: '1' });
     const firstReceipt = await api.execute(first) as TradeReceipt;

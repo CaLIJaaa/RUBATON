@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
+import { setTimeout as delay } from 'node:timers/promises';
 import { Wallet, keccak256, parseUnits, toUtf8Bytes, verifyTypedData } from 'ethers';
 import { RubaApi } from '../api.ts';
 import type { Operation } from '../api.ts';
@@ -177,7 +178,7 @@ test('API collects four swaps and exports an owner proof while user publication 
     assert.equal('stateSalt' in bundle.batch, false);
     assert.equal('tradeIds' in bundle.batch, false);
     const nonce = f.engine.getActionNonce(f.other.address);
-    await assert.rejects(f.act(f.other, { kind: 'disclosure', tradeId: '1' }), /not found/);
+    await assert.rejects(f.act(f.other, { kind: 'disclosure', tradeId: '1' }), { status: 404, message: /Квитанция не найдена/ });
     assert.equal(f.engine.getActionNonce(f.other.address), nonce);
   } finally { f.engine.close(); }
 });
@@ -254,7 +255,26 @@ test('public publication request contains only signed commitments and waits for 
     const receipt = await f.act(f.owner, { kind: 'receipt', tradeId: '1' });
     assert.deepEqual(receipt.publication, { status: 'published', transactionHash });
     assert.deepEqual((await f.http('/publication')).data, { status: 'idle', request: null, progress: { collected: 0, required: 4 } });
-    const { status, body, data } = await f.http('/disclosure/batches/1');
+    let started!: () => void, release!: () => void;
+    const provingStarted = new Promise<void>((resolve) => { started = resolve; });
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    const getPublicationRequest = f.chain.getPublicationRequest;
+    f.chain.getPublicationRequest = async () => {
+      started();
+      await blocked;
+      return getPublicationRequest();
+    };
+    const preparing = f.api.preparePublication();
+    const deadline = new AbortController();
+    await provingStarted;
+    const { status, body, data } = await Promise.race([
+      f.http('/disclosure/batches/1'),
+      delay(2_000, undefined, { signal: deadline.signal }).then(() => assert.fail('Public disclosure waited for proof preparation')),
+    ]).finally(async () => {
+      deadline.abort();
+      release();
+      await preparing;
+    });
     assert.equal(status, 200);
     assert.equal(data.source, 'contract');
     assert.equal(data.status, 'published');

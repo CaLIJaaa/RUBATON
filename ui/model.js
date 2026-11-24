@@ -61,6 +61,8 @@ export function errorMessage(error) {
   if (/NotWhitelisted|not whitelisted/i.test(text)) return 'Кошелёк ещё не допущен к новым операциям. Обратитесь к администратору.';
   if (/MarketPaused|Market is paused/i.test(text)) return 'Новые операции временно приостановлены.';
   if (/TokenWithdrawalsPaused|Withdrawals for this token are paused/i.test(text)) return 'Вывод этого токена временно приостановлен.';
+  if (/ZK (?:auxiliary )?operation capacity reached/i.test(text)) return 'В текущем ZK-пакете закончились места для пополнений и вложений. Завершите пакет обменами или попросите администратора закрыть его, затем обновите баланс.';
+  if (/ZK operation authorization is stale/i.test(text)) return 'Защищённый баланс изменился. Обновите баланс перед повторной подписью.';
   if (/blacklist/i.test(text)) return 'Перевод токена заблокирован его эмитентом. Другой токен можно вывести отдельно.';
   if (/nonce|WithdrawalAlreadyUsed/i.test(text)) return 'Состояние запроса изменилось. Обновите данные перед повторным действием.';
   if (/ExpiredWithdrawal|expired|obsolete|InvalidSignerEpoch|signer epoch/i.test(text)) return 'Разрешение устарело. Обновите список запросов на вывод.';

@@ -60,6 +60,8 @@ interface LocalTransition extends ProveableTransition {
   accountDA: DaRecord[];
   poolDA: PoolDa;
   tradeBatchId?: bigint | string;
+  txHash?: string;
+  blockNumber?: number;
 }
 type EventRecord = { eventId: bigint; kind: 2 | 7; owner: string; token: 'RUBA' | 'USDT'; amount: bigint; reference: bigint; legacyEventId: string; transactionHash: string; blockNumber: number };
 const rootHex = (value: bigint | string) => zeroPadValue(toBeHex(BigInt(value)), 32);
@@ -374,24 +376,37 @@ export class ZkVaultChain extends VaultChain {
 
   private async transitionPublication(local: LocalTransition, confirmedNumber: number): Promise<{ transactionHash: string; blockNumber: number }> {
     const version = BigInt(local.stateVersion), signals = checkedSignals(local.publicSignals);
-    const logs = await this.findLogs([this.zkAbi.getEvent('ZkTransitionPublished')!.topicHash, zeroPadValue(toBeHex(version), 32)], confirmedNumber);
-    if (logs.length !== 1) throw new Error('Confirmed ZK transition publication event was not found uniquely');
-    const log = logs[0], event = this.zkAbi.parseLog(log);
-    if (!event || log.removed || event.args.stateVersion !== version || !sameSignals(event.args.publicSignals, signals)
+    const topics = [this.zkAbi.getEvent('ZkTransitionPublished')!.topicHash, zeroPadValue(toBeHex(version), 32)];
+    const vault = this.config.vaultAddress.toLowerCase();
+    let transactionHash = local.txHash;
+    let blockNumber = local.blockNumber;
+    let discoveredLog;
+    if (!transactionHash) {
+      const logs = await this.findLogs(topics, confirmedNumber);
+      if (logs.length !== 1 || logs[0].removed) throw new Error('Confirmed ZK transition publication event was not found uniquely');
+      discoveredLog = logs[0];
+      transactionHash = discoveredLog.transactionHash;
+      blockNumber = discoveredLog.blockNumber;
+    }
+    const receipt = await this.provider.getTransactionReceipt(transactionHash);
+    if (!receipt || receipt.status !== 1 || receipt.blockNumber > confirmedNumber
+      || (blockNumber !== undefined && receipt.blockNumber !== blockNumber)) throw new Error('ZK publication transaction is not confirmed');
+    const events = receipt.logs.filter((log) => log.address.toLowerCase() === vault && !log.removed
+      && topics.every((topic, index) => topic === log.topics[index]));
+    if (events.length !== 1) throw new Error('Confirmed ZK transition publication event was not found uniquely');
+    const log = events[0];
+    if (discoveredLog && (log.index !== discoveredLog.index || log.data !== discoveredLog.data
+      || log.topics.join(',') !== discoveredLog.topics.join(','))) throw new Error('ZK publication transaction is not confirmed');
+    const event = this.zkAbi.parseLog(log);
+    if (!event || event.args.stateVersion !== version || !sameSignals(event.args.publicSignals, signals)
       || BigInt(event.args.tradeBatchId) !== this.tradeBatchIdAt(version)) this.fail('ZK transition publication event differs from the immutable journal');
-    const receipt = await this.provider.getTransactionReceipt(log.transactionHash);
-    if (!receipt || receipt.status !== 1 || receipt.blockNumber > confirmedNumber || receipt.blockNumber !== log.blockNumber
-      || !receipt.logs.some((candidate) => candidate.index === log.index && candidate.address.toLowerCase() === this.config.vaultAddress.toLowerCase()
-        && candidate.data === log.data && candidate.topics.join(',') === log.topics.join(','))) throw new Error('ZK publication transaction is not confirmed');
     if ((await this.provider.getBlock(receipt.blockNumber))?.hash !== receipt.blockHash) throw new Error('ZK publication receipt is not canonical');
-    return { transactionHash: log.transactionHash, blockNumber: receipt.blockNumber };
+    return { transactionHash, blockNumber: receipt.blockNumber };
   }
 
   override async getDisclosureBatch(batchId: bigint): Promise<PublicReceiptBatch | undefined> {
-    return this.serialObservation(() => this.readDisclosureBatch(batchId));
-  }
-
-  private async readDisclosureBatch(batchId: bigint): Promise<PublicReceiptBatch | undefined> {
+    // An immutable publication can be read while a newer proof is being generated.
+    this.assertHealthy();
     if (typeof batchId !== 'bigint' || batchId <= 0n || batchId >= (1n << 64n)) throw new Error('Invalid ZK batch ID');
     const local = this.engine.getTransitionForBatch(batchId) as unknown as LocalTransition | undefined;
     if (!local) return undefined;
@@ -403,8 +418,9 @@ export class ZkVaultChain extends VaultChain {
     const version = BigInt(local.stateVersion);
     const common = { chainId: this.config.chainId, vault: this.config.vaultAddress, schemaVersion: 2, proofMode: 'zk', circuitProofMode: ZK_PROOF_MODE, stateVersion: version, publicSignals: signals };
     if (BigInt(await this.zkVault.stateVersion({ blockTag: confirmed.number })) < version) return { ...common, status: 'pending', source: 'server', batch };
-    if (!sameSignals(signals, await this.canonicalHeader(version, confirmed.number))) this.fail('Published ZK disclosure header differs from the journal');
+    if (!sameSignals(signals, await this.canonicalHeader(version, confirmed.number))) throw new Error('Published ZK disclosure header differs from the journal');
     const publication = await this.transitionPublication(local, confirmed.number);
+    this.assertHealthy();
     return { ...common, status: 'published', source: 'contract', batch: { ...batch, publishedTxHash: publication.transactionHash }, blockNumber: publication.blockNumber };
   }
 
