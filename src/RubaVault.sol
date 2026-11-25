@@ -59,6 +59,25 @@ contract RubaVault is Ownable2Step, EIP712, ReentrancyGuard {
     mapping(address token => bool paused) public withdrawalsPaused;
     mapping(address account => mapping(uint256 nonce => bool used)) public usedWithdrawalNonces;
 
+    struct ResumeState {
+        uint256 round;
+        uint256 approvals;
+        uint256 readyAt;
+        uint256 guardianEpoch;
+    }
+
+    uint256 public constant PAUSE_GUARDIAN_COUNT = 3;
+    uint256 public constant RESUME_APPROVALS = 2;
+    uint256 public constant MAX_RESUME_DELAY = 7 days;
+
+    address[3] private _pauseGuardians;
+    bool public pauseGuardiansConfigured;
+    uint256 public resumeDelay;
+    uint256 public guardianEpoch;
+    ResumeState private _marketResume;
+    mapping(address token => ResumeState state) private _tokenResume;
+    mapping(bytes32 rotation => uint256 approvals) private _rotationApprovals;
+
     bytes32 public stateRoot;
     uint256 public lastBatchId;
     uint256 public lastTradeId;
@@ -79,6 +98,17 @@ contract RubaVault is Ownable2Step, EIP712, ReentrancyGuard {
     error WithdrawalAlreadyUsed();
     error InvalidSignature();
     error InvalidBatch();
+    error OwnershipRenounceDisabled();
+    error PauseGuardiansAlreadyConfigured();
+    error PauseGuardiansNotConfigured();
+    error InvalidPauseGuardians();
+    error UnauthorizedPauser();
+    error UnauthorizedGuardian();
+    error ResumeRequiresGuardians();
+    error NothingToResume();
+    error ResumeAlreadyApproved();
+    error ResumeNotReady();
+    error RotationAlreadyApproved();
 
     event Deposited(
         uint256 indexed depositId, address indexed account, address indexed token, uint256 amount
@@ -93,6 +123,11 @@ contract RubaVault is Ownable2Step, EIP712, ReentrancyGuard {
     event WhitelistUpdated(address indexed account, bool allowed);
     event MarketPauseUpdated(bool paused);
     event TokenWithdrawalPauseUpdated(address indexed token, bool paused);
+    event PauseGuardiansConfigured(address[3] guardians, uint256 resumeDelay);
+    event ResumeApproved(address indexed token, uint256 indexed round, address indexed guardian, uint256 approvals);
+    event ResumeScheduled(address indexed token, uint256 indexed round, uint256 readyAt);
+    event PauseGuardianRotationApproved(uint256 indexed index, address indexed newGuardian, address indexed guardian);
+    event PauseGuardianRotated(uint256 indexed index, address indexed previousGuardian, address indexed newGuardian);
     event OperatorUpdated(address indexed previousOperator, address indexed newOperator, uint256 signerEpoch);
     event BatchPublished(
         uint256 indexed batchId,
@@ -278,15 +313,186 @@ contract RubaVault is Ownable2Step, EIP712, ReentrancyGuard {
         emit WhitelistUpdated(account, allowed);
     }
 
-    function setMarketPaused(bool paused) external onlyOwner {
-        marketPaused = paused;
-        emit MarketPauseUpdated(paused);
+    /// @notice Pause is open to the owner and every pause guardian. Before guardians are
+    /// configured the owner also resumes; after that a resume needs two guardians.
+    function setMarketPaused(bool paused) external {
+        if (paused) {
+            _checkPauser();
+            marketPaused = true;
+            _resetResume(_marketResume, true);
+            emit MarketPauseUpdated(true);
+            return;
+        }
+        _checkOwner();
+        if (pauseGuardiansConfigured) revert ResumeRequiresGuardians();
+        marketPaused = false;
+        emit MarketPauseUpdated(false);
     }
 
-    function setTokenWithdrawalsPaused(address token, bool paused) external onlyOwner {
+    function setTokenWithdrawalsPaused(address token, bool paused) external {
         _requireSupportedToken(token);
-        withdrawalsPaused[token] = paused;
-        emit TokenWithdrawalPauseUpdated(token, paused);
+        if (paused) {
+            _checkPauser();
+            withdrawalsPaused[token] = true;
+            _resetResume(_tokenResume[token], true);
+            emit TokenWithdrawalPauseUpdated(token, true);
+            return;
+        }
+        _checkOwner();
+        if (pauseGuardiansConfigured) revert ResumeRequiresGuardians();
+        withdrawalsPaused[token] = false;
+        emit TokenWithdrawalPauseUpdated(token, false);
+    }
+
+    /// @notice One-time setup of the three pause roles, for example admin, guardian and monitor bot.
+    function setPauseGuardians(address[3] calldata guardians, uint256 delay) external onlyOwner {
+        if (pauseGuardiansConfigured) revert PauseGuardiansAlreadyConfigured();
+        if (delay > MAX_RESUME_DELAY) revert InvalidPauseGuardians();
+        for (uint256 i; i < PAUSE_GUARDIAN_COUNT; ++i) {
+            if (guardians[i] == address(0)) revert InvalidPauseGuardians();
+            for (uint256 j; j < i; ++j) {
+                if (guardians[i] == guardians[j]) revert InvalidPauseGuardians();
+            }
+            _pauseGuardians[i] = guardians[i];
+        }
+        pauseGuardiansConfigured = true;
+        resumeDelay = delay;
+        emit PauseGuardiansConfigured(guardians, delay);
+    }
+
+    function pauseGuardians() external view returns (address[3] memory) {
+        return _pauseGuardians;
+    }
+
+    function isPauseGuardian(address account) public view returns (bool) {
+        return pauseGuardiansConfigured && account != address(0)
+            && (account == _pauseGuardians[0] || account == _pauseGuardians[1] || account == _pauseGuardians[2]);
+    }
+
+    function marketResumeStatus() external view returns (uint256 round, uint256 approvals, uint256 readyAt) {
+        return _resumeStatus(_marketResume);
+    }
+
+    function tokenWithdrawalsResumeStatus(address token)
+        external
+        view
+        returns (uint256 round, uint256 approvals, uint256 readyAt)
+    {
+        return _resumeStatus(_tokenResume[token]);
+    }
+
+    function approveMarketResume() external {
+        if (!marketPaused) revert NothingToResume();
+        if (_approveResume(_marketResume, address(0))) _resumeMarket();
+    }
+
+    function executeMarketResume() external {
+        if (!marketPaused) revert NothingToResume();
+        _requireResumeReady(_marketResume);
+        _resumeMarket();
+    }
+
+    function approveTokenWithdrawalsResume(address token) external {
+        _requireSupportedToken(token);
+        if (!withdrawalsPaused[token]) revert NothingToResume();
+        if (_approveResume(_tokenResume[token], token)) _resumeTokenWithdrawals(token);
+    }
+
+    function executeTokenWithdrawalsResume(address token) external {
+        _requireSupportedToken(token);
+        if (!withdrawalsPaused[token]) revert NothingToResume();
+        _requireResumeReady(_tokenResume[token]);
+        _resumeTokenWithdrawals(token);
+    }
+
+    /// @notice Replaces one guardian after two current guardians approve the same change.
+    function approveGuardianRotation(uint256 index, address newGuardian) external {
+        uint256 bit = _guardianBit(msg.sender);
+        if (index >= PAUSE_GUARDIAN_COUNT || newGuardian == address(0) || isPauseGuardian(newGuardian)) {
+            revert InvalidPauseGuardians();
+        }
+        bytes32 key = keccak256(abi.encode(guardianEpoch, index, newGuardian));
+        uint256 approvals = _rotationApprovals[key];
+        if (approvals & bit != 0) revert RotationAlreadyApproved();
+        approvals |= bit;
+        _rotationApprovals[key] = approvals;
+        emit PauseGuardianRotationApproved(index, newGuardian, msg.sender);
+        if (_countBits(approvals) < RESUME_APPROVALS) return;
+        address previous = _pauseGuardians[index];
+        _pauseGuardians[index] = newGuardian;
+        ++guardianEpoch;
+        emit PauseGuardianRotated(index, previous, newGuardian);
+    }
+
+    function renounceOwnership() public pure override {
+        revert OwnershipRenounceDisabled();
+    }
+
+    function _checkPauser() internal view {
+        if (msg.sender != owner() && !isPauseGuardian(msg.sender)) revert UnauthorizedPauser();
+    }
+
+    function _guardianBit(address account) private view returns (uint256) {
+        if (!pauseGuardiansConfigured) revert PauseGuardiansNotConfigured();
+        for (uint256 i; i < PAUSE_GUARDIAN_COUNT; ++i) {
+            if (account == _pauseGuardians[i]) return 1 << i;
+        }
+        revert UnauthorizedGuardian();
+    }
+
+    function _resetResume(ResumeState storage state, bool newRound) private {
+        if (newRound) ++state.round;
+        state.approvals = 0;
+        state.readyAt = 0;
+        state.guardianEpoch = guardianEpoch;
+    }
+
+    function _resumeStatus(ResumeState storage state)
+        private
+        view
+        returns (uint256 round, uint256 approvals, uint256 readyAt)
+    {
+        if (state.guardianEpoch != guardianEpoch) return (state.round, 0, 0);
+        return (state.round, _countBits(state.approvals), state.readyAt);
+    }
+
+    function _approveResume(ResumeState storage state, address token) private returns (bool resumeNow) {
+        uint256 bit = _guardianBit(msg.sender);
+        if (state.guardianEpoch != guardianEpoch) _resetResume(state, false);
+        if (state.approvals & bit != 0) revert ResumeAlreadyApproved();
+        state.approvals |= bit;
+        uint256 count = _countBits(state.approvals);
+        emit ResumeApproved(token, state.round, msg.sender, count);
+        if (count < RESUME_APPROVALS || state.readyAt != 0) return false;
+        state.readyAt = block.timestamp + resumeDelay;
+        emit ResumeScheduled(token, state.round, state.readyAt);
+        return resumeDelay == 0;
+    }
+
+    function _requireResumeReady(ResumeState storage state) private view {
+        if (
+            !pauseGuardiansConfigured || state.guardianEpoch != guardianEpoch || state.readyAt == 0
+                || block.timestamp < state.readyAt
+        ) revert ResumeNotReady();
+    }
+
+    function _resumeMarket() private {
+        marketPaused = false;
+        _resetResume(_marketResume, false);
+        emit MarketPauseUpdated(false);
+    }
+
+    function _resumeTokenWithdrawals(address token) private {
+        withdrawalsPaused[token] = false;
+        _resetResume(_tokenResume[token], false);
+        emit TokenWithdrawalPauseUpdated(token, false);
+    }
+
+    function _countBits(uint256 value) private pure returns (uint256 count) {
+        while (value != 0) {
+            count += value & 1;
+            value >>= 1;
+        }
     }
 
     function setOperator(address nextOperator) external onlyOwner {
