@@ -7,6 +7,15 @@ const ACTION_TYPES = { Action: [
   { name: 'nonce', type: 'uint256' }, { name: 'deadline', type: 'uint256' },
 ] };
 const PRIVATE_OPERATION_TYPES = { PrivateOperation: [{ name: 'commitment', type: 'uint256' }] };
+const TIMED_OPERATION_TYPES = { TimedPrivateOperation: [{ name: 'commitment', type: 'uint256' }, { name: 'deadline', type: 'uint256' }] };
+const TIMED_OPERATION_KINDS = new Set(['swap', 'addLiquidity']);
+const OPERATION_DEADLINE_SECONDS = 3600n;
+function operationSigner(domain, commitment, signature) {
+  if (typeof signature === 'string' && /^0x[0-9a-fA-F]{194}$/.test(signature)) {
+    return verifyTypedData(domain, TIMED_OPERATION_TYPES, { commitment, deadline: BigInt('0x' + signature.slice(2, 66)) }, '0x' + signature.slice(66));
+  }
+  return verifyTypedData(domain, PRIVATE_OPERATION_TYPES, { commitment }, signature);
+}
 const ZK_PUBLICATION_TYPES = { ZkPublication: [
   { name: 'headerDigest', type: 'uint256' }, { name: 'deadline', type: 'uint256' }, { name: 'signerEpoch', type: 'uint256' },
 ] };
@@ -607,9 +616,13 @@ export class RubaClient {
       await this.assertContext();
       const title = Object.hasOwn(SIGNATURE_TITLES, operation.kind) ? SIGNATURE_TITLES[operation.kind] : 'Подписать запрос';
       const signature = await this.#walletStep(`sign:${operation.kind}`, 'signature', title, async () => {
-        const signed = zk
-          ? await this.signer.signTypedData({ ...domain, name: 'RubaZkOperation', version: '2' }, PRIVATE_OPERATION_TYPES, { commitment: zk.commitment })
-          : await this.signer.signTypedData(domain, ACTION_TYPES, intent);
+        const operationDomain = { ...domain, name: 'RubaZkOperation', version: '2' };
+        const deadline = BigInt(block.timestamp) + OPERATION_DEADLINE_SECONDS;
+        const signed = !zk
+          ? await this.signer.signTypedData(domain, ACTION_TYPES, intent)
+          : TIMED_OPERATION_KINDS.has(operation.kind)
+            ? '0x' + deadline.toString(16).padStart(64, '0') + (await this.signer.signTypedData(operationDomain, TIMED_OPERATION_TYPES, { commitment: zk.commitment, deadline })).slice(2)
+            : await this.signer.signTypedData(operationDomain, PRIVATE_OPERATION_TYPES, { commitment: zk.commitment });
         await this.assertContext();
         return signed;
       });
@@ -949,7 +962,7 @@ export class RubaClient {
       const parsed = { owner: getAddress(record.owner), signature: record.signature };
       for (const field of ['kind', 'slot', 'commitment', 'eventId', 'token', 'amount', 'reference']) parsed[field] = c.field(record[field]).toString();
       if (BigInt(parsed.kind) > 8n || BigInt(parsed.slot) >= 16n || typeof parsed.signature !== 'string'
-        || !/^0x(?:[0-9a-fA-F]{130})?$/.test(parsed.signature)) throw new Error('Некорректная авторизация ZK-операции.');
+        || !/^0x(?:[0-9a-fA-F]{130}|[0-9a-fA-F]{194})?$/.test(parsed.signature)) throw new Error('Некорректная авторизация ZK-операции.');
       return parsed;
     });
     const swaps = operations.filter((record) => record.kind === '3').length;
@@ -1047,7 +1060,7 @@ export class RubaClient {
         if ([1, 3, 4, 5, 6, 8].includes(Number(record.kind))) {
           if (this.isProofOnly && record.kind === '8') throw new Error('Возврат резервирования запрещён.');
           const expected = Number(record.kind) === 8 ? getAddress(operator) : record.owner;
-          if (verifyTypedData(operationDomain, PRIVATE_OPERATION_TYPES, { commitment: record.commitment }, record.signature) !== expected) throw new Error('Нет корректного согласия владельца на ZK-операцию.');
+          if (operationSigner(operationDomain, record.commitment, record.signature) !== expected) throw new Error('Нет корректного согласия владельца на ZK-операцию.');
         }
         if (record.owner === owner && [1, 3, 4, 5, 6].includes(Number(record.kind))) {
           const saved = this.zkAuthorizations.find((item) => item.commitment === record.commitment);

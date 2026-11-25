@@ -1,11 +1,11 @@
 import { existsSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { isDeepStrictEqual } from 'node:util';
-import { getAddress, verifyTypedData } from 'ethers';
+import { getAddress } from 'ethers';
 import { RubaEngine, sqrt } from '../engine.ts';
 import type { State } from '../engine.ts';
 import type { EngineConfig, ReceiptBatch, Token, TradeReceipt, WithdrawalRecord } from '../types.ts';
-import { ZK_OPERATION_TYPES, zkOperationDomain } from '../auth.ts';
+import { operationSignatureDeadline, recoverOperationSigner, zkOperationDomain } from '../auth.ts';
 import { buildWitness } from '../../zk/schema.ts';
 import { buildAccountTree, buildReceiptTreeV2, domainHash, encryptAccount, encryptPool, field, fieldHex,
   hashAccount, hashAuthDigest, hashDaDigest, hashOperation, hashPool, hashReceiptV2, hashState, keyCommit, randomField } from '../../zk/crypto.js';
@@ -32,7 +32,7 @@ export interface CanonicalInboxRecord {
   legacyEventId: string; transactionHash?: string; blockNumber?: number;
 }
 /** Returns a reason when the Vault would reject this operation at publication. */
-export type QueueRule = (operation: { kind: number; owner: string }) => string | undefined;
+export type QueueRule = (operation: { kind: number; owner: string; deadline?: bigint }) => string | undefined;
 export interface QueueRebuildResult {
   changed: boolean;
   fromStateVersion: bigint;
@@ -208,7 +208,7 @@ export class ZkRubaEngine extends RubaEngine {
     const auth = this.authorization;
     const commitment = hashOperation(this.domain, kind, slot, owner, oldNonce, params, salt);
     if (!auth || auth.used || BigInt(auth.account) !== owner || field(auth.commitment) !== commitment || BigInt(auth.nonce) !== oldNonce) throw new Error('Missing, replayed or mismatched private-operation authorization');
-    if (verifyTypedData(this.operationDomain(), ZK_OPERATION_TYPES, { commitment }, auth.signature) !== getAddress(auth.account)) throw new Error('Invalid private-operation owner signature');
+    if (recoverOperationSigner(this.operationDomain(), commitment, auth.signature) !== getAddress(auth.account)) throw new Error('Invalid private-operation owner signature');
     auth.used = true;
     return auth.signature;
   }
@@ -445,7 +445,7 @@ export class ZkRubaEngine extends RubaEngine {
       const pendingVersions = () => this.journal.transitions().filter((item) => item.status === 'pending').map((item) => item.stateVersion);
       const rejected = new Map<number, string>();
       for (const op of tail) {
-        const reason = rule({ kind: op.kind, owner: ownerAddress(op.owner) });
+        const reason = rule({ kind: op.kind, owner: ownerAddress(op.owner), deadline: operationSignatureDeadline(op.metadata.signature) });
         if (!reason) continue;
         if (!USER_KINDS.has(op.kind)) throw new Error('Vault inbox events cannot be dropped from the queue');
         rejected.set(op.seq, reason);
@@ -485,6 +485,15 @@ export class ZkRubaEngine extends RubaEngine {
       this.validateJournal();
       return { changed: true, fromStateVersion: checkpoint.stateVersion, kept, dropped, trades, pendingVersions: pendingVersions() };
     });
+  }
+  /** Earliest owner deadline among operations that are not sealed yet. */
+  earliestDraftDeadline(): bigint | undefined {
+    let earliest: bigint | undefined;
+    for (const op of this.journal.operations(true)) {
+      const deadline = operationSignatureDeadline(op.metadata.signature);
+      if (deadline !== undefined && (earliest === undefined || deadline < earliest)) earliest = deadline;
+    }
+    return earliest;
   }
   private makeRoom(ledger: State, kind: number): void {
     const tail = this.journal.operations(true);
@@ -670,7 +679,7 @@ export class ZkRubaEngine extends RubaEngine {
         || request.token !== (token === 0 ? 'RUBA' : 'USDT') || request.tokenAddress !== expectedOpening.withdrawal.token || request.amount !== p1 || request.nonce !== p2
         || request.deadline !== MAX64 || request.signerEpoch !== 0n || request.status !== 'pending') throw new Error('Stored proven withdrawal opening differs from its actual kind6 reservation');
     } else if (op.provenWithdrawal !== undefined) throw new Error('Only kind6 operations may contain proven withdrawal openings');
-    if (USER_KINDS.has(op.kind) && BigInt(verifyTypedData(this.operationDomain(), ZK_OPERATION_TYPES, { commitment }, op.metadata.signature)) !== op.owner) throw new Error('Invalid stored user authorization');
+    if (USER_KINDS.has(op.kind) && BigInt(recoverOperationSigner(this.operationDomain(), commitment, op.metadata.signature)) !== op.owner) throw new Error('Invalid stored user authorization');
     if (op.kind !== 2 && op.kind !== 7 && [op.metadata.eventId, op.metadata.token, op.metadata.amount, op.metadata.reference].some((value) => value !== 0n)) throw new Error('Private operation exposes unbound bridge metadata');
     if ((op.kind === 2 || op.kind === 7) && (op.metadata.eventId !== op.beforeState.inboxCursor + 1n || p2 !== op.metadata.eventId
       || p0 !== op.metadata.token || p1 !== op.metadata.amount || p3 !== op.metadata.reference)) throw new Error('Stored operation differs from the canonical inbox');

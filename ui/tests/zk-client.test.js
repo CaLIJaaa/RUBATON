@@ -9,6 +9,10 @@ const other = new Wallet('0x' + '22'.repeat(32));
 const config = { proofMode: 'zk', chainId: '31337', vaultAddress: getAddress('0x' + '01'.repeat(20)),
   tokens: { RUBA: { address: getAddress('0x' + '02'.repeat(20)), decimals: 18 }, USDT: { address: getAddress('0x' + '03'.repeat(20)), decimals: 6 } } };
 const privateTypes = { PrivateOperation: [{ name: 'commitment', type: 'uint256' }] };
+const timedTypes = { TimedPrivateOperation: [{ name: 'commitment', type: 'uint256' }, { name: 'deadline', type: 'uint256' }] };
+const operationSigner = (domain, commitment, signature) => signature.length === 196
+  ? verifyTypedData(domain, timedTypes, { commitment, deadline: BigInt('0x' + signature.slice(2, 66)) }, '0x' + signature.slice(66))
+  : verifyTypedData(domain, privateTypes, { commitment }, signature);
 const readTypes = { Action: [{ name: 'account', type: 'address' }, { name: 'actionHash', type: 'bytes32' }, { name: 'nonce', type: 'uint256' }, { name: 'deadline', type: 'uint256' }] };
 const wire = (value) => JSON.parse(JSON.stringify(value, (_key, item) => typeof item === 'bigint' ? item.toString() : item));
 
@@ -64,8 +68,7 @@ async function fixture({ registered = true, proven = false, whitelisted = true, 
       const body = JSON.parse(init.body); ctx.posts.push(body);
       assert.equal(BigInt(body.intent.nonce), ctx.apiNonce++);
       const domain = { name: body.zk ? 'RubaZkOperation' : 'RubaServer', version: body.zk ? '2' : '1', chainId: 31337n, verifyingContract: config.vaultAddress };
-      assert.equal(verifyTypedData(domain, body.zk ? privateTypes : readTypes,
-        body.zk ? { commitment: body.zk.commitment } : body.intent, body.signature), owner.address);
+      assert.equal(body.zk ? operationSigner(domain, body.zk.commitment, body.signature) : verifyTypedData(domain, readTypes, body.intent, body.signature), owner.address);
       let result;
       if (body.operation.kind === 'zkState') result = ctx.tamperState?.(wire(makeState())) ?? makeState();
       else if (body.operation.kind === 'account') result = { account: owner.address, balances: { RUBA: '9', USDT: '9' }, lpShares: '0', withdrawals: [], ...(embeddedAccountProof ? { zkProof: ctx.tamperState?.(wire(makeState())) ?? makeState() } : {}) };
@@ -155,8 +158,11 @@ test('ZK mutations locally commit private parameters and spend nonce while reads
   assert.equal(f.ctx.posts[1].zk.nonce, '1');
   assert.equal(f.ctx.posts[1].intent.nonce, '1');
   assert.equal(f.ctx.typed[1].domain.name, 'RubaZkOperation');
-  assert.deepEqual(Object.keys(f.ctx.typed[1].value), ['commitment']);
+  assert.deepEqual(Object.keys(f.ctx.typed[1].value), ['commitment', 'deadline']);
+  assert.equal(BigInt('0x' + f.ctx.posts[1].signature.slice(2, 66)), f.ctx.typed[1].value.deadline);
+  assert.equal(f.ctx.typed[1].value.deadline - BigInt(f.ctx.posts[1].intent.deadline), 3000n);
   await f.client.signedAction({ kind: 'withdraw', token: 'USDT', amount: '10' });
+  assert.equal(f.ctx.posts.at(-1).signature.length, 132);
   assert.equal(f.ctx.posts.at(-1).zk.nonce, '2');
   assert.equal(f.ctx.posts.at(-1).intent.nonce, '3');
   assert.notEqual(f.ctx.posts[1].zk.salt, f.ctx.posts.at(-1).zk.salt);

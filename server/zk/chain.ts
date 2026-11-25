@@ -304,7 +304,9 @@ export class ZkVaultChain extends VaultChain {
         ...unique.map((owner) => this.vault.whitelist(owner, readAt))]);
       if ((await this.provider.getBlock(tip.number))?.hash !== tip.hash) throw new Error('Chain changed while reading the queue rules; retry');
       const whitelisted = new Map(unique.map((owner, index) => [owner, Boolean(allowed[index])]));
-      const rule: QueueRule = ({ kind, owner }) => {
+      const publishBy = BigInt(tip.timestamp) + 300n;
+      const rule: QueueRule = ({ kind, owner, deadline }) => {
+        if (deadline !== undefined && deadline < publishBy) return 'owner deadline passed';
         if ((kind === 1 || kind === 3 || kind === 4) && !whitelisted.get(getAddress(owner))) return 'owner is not whitelisted';
         if ((kind === 3 || kind === 4) && paused) return 'market is paused';
         return undefined;

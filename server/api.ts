@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { getAddress, verifyTypedData } from 'ethers';
-import { ACTION_TYPES, ZK_OPERATION_TYPES, actionDomain, operationHash, uint, verifyAction, zkOperationDomain } from './auth.ts';
+import { getAddress } from 'ethers';
+import { ACTION_TYPES, ZK_OPERATION_TYPES, ZK_TIMED_OPERATION_TYPES, actionDomain, operationHash, operationSignatureDeadline, recoverOperationSigner, uint, verifyAction, zkOperationDomain } from './auth.ts';
 import type { ActionIntent } from './auth.ts';
 import type { ServerConfig } from './config.ts';
 import { tokenMetadata } from './config.ts';
@@ -61,6 +61,11 @@ export function validateOperation(value: unknown): Operation | ZkOperation {
   }
   return operation as Operation | ZkOperation;
 }
+
+/** An owner deadline must leave time to seal, prove and publish the transition. */
+const OPERATION_MIN_WINDOW = 600n;
+/** A draft is closed early when one of its owner deadlines comes this close. */
+const DEADLINE_CLOSE_MARGIN = 1200n;
 
 class HttpError extends Error {
   status: number;
@@ -150,7 +155,14 @@ export class RubaApi {
   }
 
   async sync(): Promise<void> {
-    return this.serial(async () => { await this.chain.sync(); await this.chain.publishPendingBatches(); this.workerError = false; });
+    return this.serial(async () => { await this.chain.sync(); await this.chain.publishPendingBatches(); await this.closeExpiringDraft(); this.workerError = false; });
+  }
+  /** Seal the draft before an owner deadline inside it runs out, so the Vault still accepts it. */
+  private async closeExpiringDraft(): Promise<void> {
+    if (this.config.proofMode !== 'zk') return;
+    const engine = this.engine as ZkRubaEngine;
+    const deadline = engine.earliestDraftDeadline();
+    if (deadline !== undefined && deadline <= await this.chain.latestTimestamp() + DEADLINE_CLOSE_MARGIN) engine.closePendingBatch();
   }
 
   /** Used by both the HTTP adapter and the local end-to-end demo. */
@@ -180,9 +192,10 @@ export class RubaApi {
         const authorization = (this.engine as ZkRubaEngine).prepareAuthorization(account, operation, field(uint(request.zk.salt, 'salt')));
         if (field(uint(request.zk.commitment, 'commitment')) !== BigInt(authorization.commitment)
           || uint(request.zk.nonce, 'nonce') !== BigInt(authorization.nonce)) throw new Error('ZK operation authorization is stale or mismatched');
-        const signer = verifyTypedData(zkOperationDomain(this.config.chainId, this.config.vaultAddress), ZK_OPERATION_TYPES,
-          { commitment: request.zk.commitment }, request.signature);
+        const signer = recoverOperationSigner(zkOperationDomain(this.config.chainId, this.config.vaultAddress), request.zk.commitment, request.signature);
         if (getAddress(signer) !== account) throw new Error('Invalid economic owner signature');
+        const ownerDeadline = operationSignatureDeadline(request.signature);
+        if (ownerDeadline !== undefined && ownerDeadline < timestamp + OPERATION_MIN_WINDOW) throw new Error('Owner deadline leaves no time to publish the operation; sign it again');
       } else account = verifyAction(this.config.chainId, this.config.vaultAddress, request.intent, operation, request.signature, timestamp);
       const nonce = uint(request.intent.nonce, 'nonce');
       if (nonce !== this.engine.getActionNonce(account)) throw new Error('Invalid action nonce');
@@ -296,7 +309,7 @@ export class RubaApi {
       tradesPerBatch: 4,
       ...(this.config.proofMode === 'zk' ? { minTradesPerBatch: 1, maxTradesPerBatch: 4, manualBatchClosing: true, closeBatchOnExit: true } : {}),
       publicationMode: 'user-paid',
-      ...(this.config.proofMode === 'zk' ? { proofMode: 'zk', withdrawalMode: 'proven-reservation-v1', publicationAuthorization: 'proof-only', zkOperationDomain: zkOperationDomain(this.config.chainId, this.config.vaultAddress), zkOperationTypes: ZK_OPERATION_TYPES } : {}),
+      ...(this.config.proofMode === 'zk' ? { proofMode: 'zk', withdrawalMode: 'proven-reservation-v1', publicationAuthorization: 'proof-only', zkOperationDomain: zkOperationDomain(this.config.chainId, this.config.vaultAddress), zkOperationTypes: ZK_OPERATION_TYPES, zkTimedOperationTypes: ZK_TIMED_OPERATION_TYPES } : {}),
       operationFields: OPERATION_FIELDS,
       ...(this.admission ? { admission: { mode: 'desk-approval', signer: this.admission.signerAddress } } : {}),
     };
