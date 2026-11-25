@@ -298,6 +298,18 @@
             </tbody>
           </table>
         </div>
+        <form id="admission-form" class="admission-panel" hidden>
+          <fieldset data-requires-wallet>
+            <legend>Заявка на допуск</legend>
+            <p id="admission-consent-text" class="help-text"></p>
+            <p>
+              <label for="admission-kyc-id">Номер проверки KYC</label>
+              <input id="admission-kyc-id" name="kycId" type="text" autocomplete="off" placeholder="KYC-0001" required>
+            </p>
+            <p class="help-text">Кошелёк подпишет согласие и заявку, потом отправит транзакцию допуска в Vault. Номер KYC и соль остаются у администратора допуска, в сеть попадает только хеш.</p>
+            <button id="admission-apply" type="submit" disabled>Подписать согласие и получить допуск</button>
+          </fieldset>
+        </form>
         <div class="forms-grid">
           <form id="deposit-form">
             <fieldset data-requires-wallet data-new-activity data-deposit disabled>

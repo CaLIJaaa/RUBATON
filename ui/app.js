@@ -50,6 +50,8 @@ const state = {
   vaultAdminLoading: false,
   vaultAdminError: '',
   vaultWhitelist: null,
+  admissionInfo: null,
+  admissionInfoClient: null,
   vaultTransactions: new Map(),
 };
 
@@ -233,7 +235,7 @@ function vaultKey() {
 }
 
 function canManageVault() {
-  return ready() && state.page === 'admin' && state.vaultAdmin?.isOwner && !state.vaultAdminLoading;
+  return ready() && state.page === 'admin' && (state.vaultAdmin?.isOwner || state.vaultAdmin?.pauseRoles?.isGuardian) && !state.vaultAdminLoading;
 }
 
 function renderVaultAdmin() {
@@ -244,23 +246,24 @@ function renderVaultAdmin() {
   const writeDisabled = readDisabled || tx?.status === 'submitted';
   element('admin-vault-status').textContent = !state.account ? 'Подключите кошелёк владельца Vault.'
     : state.vaultAdminLoading ? 'Читаем состояние Vault…'
-      : state.vaultAdminError || (vault ? `${pairLabel()} · ${vault.isOwner ? 'Вы владелец Vault' : `Владелец Vault: ${vault.owner}`}` : 'Vault ещё не загружен.');
+      : state.vaultAdminError || (vault ? `${pairLabel()} · ${vault.isOwner ? 'Вы владелец Vault' : vault.pauseRoles?.isGuardian ? 'Вы одна из ролей паузы' : `Владелец Vault: ${vault.owner}`}` : 'Vault ещё не загружен.');
   element('admin-vault-refresh').disabled = state.busy || !ready() || state.vaultAdminLoading;
-  element('admin-wallet-controls').disabled = readDisabled;
+  element('admin-wallet-controls').disabled = readDisabled || !vault?.isOwner;
   element('admin-pause-controls').disabled = writeDisabled;
   element('admin-wallet-check').disabled = readDisabled || !target;
-  element('admin-wallet-allow').disabled = writeDisabled || !target;
-  element('admin-wallet-deny').disabled = writeDisabled || !target;
+  element('admin-wallet-allow').disabled = writeDisabled || !target || !vault?.isOwner;
+  element('admin-wallet-deny').disabled = writeDisabled || !target || !vault?.isOwner;
   element('admin-wallet-status').textContent = state.vaultWhitelist
     ? (state.vaultWhitelist.allowed ? 'Адрес есть в whitelist.' : 'Адреса нет в whitelist.') : '';
-  element('admin-market-status').textContent = vault ? (vault.marketPaused ? 'Рынок на паузе.' : 'Рынок открыт.') : '';
+  const resumeNote = (status) => status && status.approvals > 0 ? ` Одобрили возобновление: ${status.approvals} из 2.` : '';
+  element('admin-market-status').textContent = vault ? (vault.marketPaused ? `Рынок на паузе.${resumeNote(vault.pauseRoles?.market)}` : 'Рынок открыт.') : '';
   element('admin-market-toggle').textContent = vault?.marketPaused ? 'Снять паузу рынка' : 'Поставить рынок на паузу';
   const withdrawalStatus = [];
   for (const token of ['RUBA', 'USDT']) {
     const paused = vault?.withdrawalsPaused[token];
     const name = symbol(token);
     element(`admin-withdrawals-${token.toLowerCase()}-toggle`).textContent = paused ? `Возобновить вывод ${name}` : `Остановить вывод ${name}`;
-    if (vault) withdrawalStatus.push(`${name}: ${paused ? 'вывод на паузе' : 'вывод открыт'}`);
+    if (vault) withdrawalStatus.push(`${name}: ${paused ? `вывод на паузе${resumeNote(vault.pauseRoles?.withdrawals[token]).replace('.', '')}` : 'вывод открыт'}`);
   }
   element('admin-withdrawals-status').textContent = withdrawalStatus.join(' · ');
   const txLabels = { submitted: 'Транзакция ожидает подтверждения. Обновите статус из сети.', confirmed: 'Транзакция подтверждена.', reverted: 'Транзакция отклонена контрактом.' };
@@ -298,7 +301,9 @@ function renderReadiness() {
     else if (!state.snapshot || state.needsRefresh) message = 'Для просмотра баланса пула нужна подпись.';
     else if (!state.market && !state.publicAccountLoading) message = `Не удалось проверить допуск к пулу.${state.publicAccountError ? ` ${state.publicAccountError}` : ''} Обновите данные.`;
     else if (!state.market) message = 'Проверяем доступ к пулу.';
-    else if (!state.market.whitelisted) message = 'Кошелька нет в whitelist. Пополнение, обмен и добавление ликвидности недоступны.';
+    else if (!state.market.whitelisted) message = state.client?.hasAdmissionDesk
+      ? 'Кошелька нет в whitelist. Подайте заявку на допуск в разделе «Мой баланс».'
+      : 'Кошелька нет в whitelist. Пополнение, обмен и добавление ликвидности недоступны.';
     else if (state.market.marketPaused) message = 'Пополнение, обмен и добавление ликвидности на паузе.';
     else if (!registeredAccount()) message = 'Зарегистрируйте защищённый баланс в разделе «Мой баланс».';
     else if (BigInt(state.snapshot.balances.RUBA) === 0n && BigInt(state.snapshot.balances.USDT) === 0n && BigInt(state.snapshot.lpShares) === 0n) message = 'В этом пуле пусто. Пополните баланс в разделе «Мой баланс».';
@@ -489,7 +494,28 @@ function showDisclosurePage() {
   });
 }
 
+function renderAdmission() {
+  const client = state.client;
+  const show = Boolean(client?.hasAdmissionDesk && state.market && !state.market.whitelisted);
+  element('admission-form').hidden = !show;
+  if (!show) return;
+  if (state.admissionInfoClient !== client) {
+    state.admissionInfoClient = client;
+    state.admissionInfo = null;
+    client.getAdmissionInfo().then((info) => {
+      if (state.client !== client) return;
+      state.admissionInfo = info;
+      renderAdmission();
+    }).catch((error) => {
+      if (state.client === client) element('admission-consent-text').textContent = `Не удалось загрузить текст согласия. ${errorMessage(error)}`;
+    });
+  }
+  if (state.admissionInfo) element('admission-consent-text').textContent = `Согласие: ${state.admissionInfo.consentText}`;
+  element('admission-apply').disabled = state.busy || !state.admissionInfo;
+}
+
 function renderAccount() {
+  renderAdmission();
   for (const token of ['RUBA', 'USDT']) {
     const suffix = token.toLowerCase();
     element(`internal-${suffix}`).textContent = state.snapshot ? amount(token, state.snapshot.balances[token]) : '—';
@@ -516,6 +542,7 @@ function renderSwapBalance() {
 }
 
 function renderWallet() {
+  renderAdmission();
   element('entry-policy').textContent = provenWithdrawals()
     ? 'Допуск к пополнению, обмену и добавлению ликвидности выдаёт администратор. Свои токены и LP-доли можно вывести после отзыва допуска.'
     : 'Допуск к обмену и новым вложениям выдаёт администратор.';
@@ -1502,6 +1529,22 @@ element('liquidity-remove-form').addEventListener('submit', (event) => {
       }
     }
     await refreshAfterSuccess(version, `На внутренний баланс рассчитано ${amount('RUBA', result.rubaAmount)} ${symbol('RUBA')} и ${amount('USDT', result.usdtAmount)} ${symbol('USDT')}.${publicationMessage} Вывести их можно на странице «Баланс».`);
+  });
+});
+
+element('admission-form').addEventListener('submit', (event) => {
+  event.preventDefault();
+  void runWallet('Заявка на допуск', 'Готовим заявку на допуск…', [
+    checklist('sign:admission', 'Подписать согласие с риском RUBA и заявку'),
+    checklist('tx:admit', 'Отправить допуск в Vault'),
+  ], async (version) => {
+    await state.client.applyForAdmission(element('admission-kyc-id').value, (message) => { if (version === state.version) setStatus(message); });
+    guard(version);
+    await refreshPublicAccount(version, { fresh: true });
+    guard(version);
+    element('admission-kyc-id').value = '';
+    renderAccount();
+    setStatus('Допуск записан в Vault. Теперь можно зарегистрировать защищённый баланс и пополнить его.');
   });
 });
 

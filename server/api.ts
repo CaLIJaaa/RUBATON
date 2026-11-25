@@ -8,6 +8,7 @@ import { tokenMetadata } from './config.ts';
 import type { RubaEngine } from './engine.ts';
 import type { VaultChain } from './chain.ts';
 import type { Token } from './types.ts';
+import { AdmissionDesk, AdmissionError } from './admission.ts';
 import { getStaticResponse } from './static.ts';
 import { disclosureBundle } from './disclosure.ts';
 import type { ZkRubaEngine } from './zk/engine.ts';
@@ -76,9 +77,18 @@ export class RubaApi {
   readonly config: ServerConfig;
   private queue: Promise<unknown> = Promise.resolve();
   private workerError = false;
+  admission?: AdmissionDesk;
 
   constructor(engine: RubaEngine, chain: VaultChain, config: ServerConfig) {
     this.engine = engine; this.chain = chain; this.config = config;
+  }
+
+  attachAdmissionDesk(desk: AdmissionDesk): this {
+    if (desk.chainId !== this.config.chainId || desk.vaultAddress.toLowerCase() !== this.config.vaultAddress.toLowerCase()) {
+      throw new Error('Admission desk belongs to another vault');
+    }
+    this.admission = desk;
+    return this;
   }
 
   private serial<T>(operation: () => Promise<T>): Promise<T> {
@@ -261,6 +271,7 @@ export class RubaApi {
       publicationMode: 'user-paid',
       ...(this.config.proofMode === 'zk' ? { proofMode: 'zk', withdrawalMode: 'proven-reservation-v1', publicationAuthorization: 'proof-only', zkOperationDomain: zkOperationDomain(this.config.chainId, this.config.vaultAddress), zkOperationTypes: ZK_OPERATION_TYPES } : {}),
       operationFields: OPERATION_FIELDS,
+      ...(this.admission ? { admission: { mode: 'desk-approval', signer: this.admission.signerAddress } } : {}),
     };
   }
 
@@ -320,7 +331,12 @@ export class RubaApi {
         send(200, { ...publication, tokens: this.publicConfig().tokens, ...(this.config.proofMode === 'zk' ? { proofMode: 'zk' } : {}) });
         return;
       }
-      if (request.method !== 'POST' || url.pathname !== '/actions') throw new HttpError(404, 'Not found');
+      if (request.method === 'GET' && url.pathname === '/admission') {
+        if (!this.admission) throw new HttpError(404, 'Допуск через заявку не включён');
+        send(200, this.admission.publicInfo()); return;
+      }
+      const isAdmission = request.method === 'POST' && url.pathname === '/admission/apply';
+      if (!isAdmission && (request.method !== 'POST' || url.pathname !== '/actions')) throw new HttpError(404, 'Not found');
       if (request.headers['content-type']?.split(';')[0].trim() !== 'application/json') throw new HttpError(415, 'Use application/json');
       const chunks: Buffer[] = [];
       let size = 0;
@@ -329,6 +345,17 @@ export class RubaApi {
         size += buffer.length;
         if (size > 32_768) throw new HttpError(413, 'Request body exceeds 32 KiB');
         chunks.push(buffer);
+      }
+      if (isAdmission) {
+        if (!this.admission) throw new HttpError(404, 'Допуск через заявку не включён');
+        const application = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        try {
+          send(200, { result: await this.admission.apply(application) });
+        } catch (error) {
+          if (error instanceof AdmissionError) throw new HttpError(error.status, error.message);
+          throw error;
+        }
+        return;
       }
       const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as ActionRequest;
       send(200, { result: await this.execute(body) });

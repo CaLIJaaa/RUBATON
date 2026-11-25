@@ -5,6 +5,7 @@ import { Contract, JsonRpcProvider, NonceManager, Wallet, Interface } from 'ethe
 import type { ServerConfig } from '../server/config.ts';
 import type { Operation, ZkOperation, ActionRequest } from '../server/api.ts';
 import { RubaApi } from '../server/api.ts';
+import { admissionDeskFromEnv } from '../server/admission.ts';
 import { ZkRubaEngine } from '../server/zk/engine.ts';
 import { ZkVaultChain, ZK_VAULT_ABI } from '../server/zk/chain.ts';
 import type { MarketRuntime } from '../server/market-types.ts';
@@ -49,7 +50,10 @@ export async function createMarketRuntimes(manifest: DeploymentManifest, keys: P
       chmodSync(path, 0o600);
       const chain = new ZkVaultChain(config, engine);
       try { await chain.initialize(); } catch (error) { await chain.prover.close(); chain.provider.destroy(); engine.close(); throw error; }
-      markets.push({ id: definition.id, label: pool.label, config, engine, chain, api: new RubaApi(engine, chain, config) });
+      const api = new RubaApi(engine, chain, config);
+      const desk = admissionDeskFromEnv(process.env, config.chainId, config.vaultAddress, `${path}.admission.sqlite`);
+      if (desk) api.attachAdmissionDesk(desk);
+      markets.push({ id: definition.id, label: pool.label, config, engine, chain, api });
     }
     return markets;
   } catch (error) { await closeMarketRuntimes(markets); throw error; }

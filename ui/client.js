@@ -55,6 +55,14 @@ const VAULT_ABI = [
   'function withdrawalsPaused(address) view returns(bool)', 'function operator() view returns(address)',
   'function setWhitelist(address,bool)', 'function setMarketPaused(bool)', 'function setTokenWithdrawalsPaused(address,bool)',
   'function signerEpoch() view returns(uint256)',
+  'function admissionSigner() view returns(address)', 'function kycHashOf(address) view returns(bytes32)',
+  'function consentHashOf(address) view returns(bytes32)',
+  'function admit((address account,bytes32 kycHash,bytes32 consentHash,uint256 deadline,uint256 nonce),bytes)',
+  'function pauseGuardiansConfigured() view returns(bool)', 'function isPauseGuardian(address) view returns(bool)',
+  'function approveMarketResume()', 'function executeMarketResume()',
+  'function approveTokenWithdrawalsResume(address)', 'function executeTokenWithdrawalsResume(address)',
+  'function marketResumeStatus() view returns(uint256 round,uint256 approvals,uint256 readyAt)',
+  'function tokenWithdrawalsResumeStatus(address) view returns(uint256 round,uint256 approvals,uint256 readyAt)',
   'function usedWithdrawalNonces(address,uint256) view returns(bool)',
   'function deposit(address,uint256) returns(uint256)',
   'function withdraw((address account,address token,uint256 amount,uint256 nonce,uint256 deadline,uint256 signerEpoch),bytes)',
@@ -78,7 +86,9 @@ const VAULT_ABI = [
   'function publishProvenTransitionAndWithdraw(uint256[13] signals,(uint256 kind,uint256 slot,address owner,uint256 commitment,uint256 eventId,uint256 token,uint256 amount,uint256 referenceId,bytes signature)[8] operations,(uint256 kind,uint256 slot,address owner,uint256 newLeaf,uint256[7] ciphertext)[8] accountDA,(uint256 poolHash,uint256[6] poolCiphertext) poolDA,(uint256[2] a,uint256[2][2] b,uint256[2] c) proof,(address account,address token,uint256 amount,uint256 nonce,uint256 spendNonce,uint256 salt) withdrawal)',
   'function withdrawProven((address account,address token,uint256 amount,uint256 nonce,uint256 spendNonce,uint256 salt) withdrawal)',
   'function batches(uint256) view returns(uint256 batchId,bytes32 previousStateRoot,bytes32 newStateRoot,bytes32 receiptsRoot,uint256 firstTradeId,uint256 tradeCount)',
-  ...['NotWhitelisted', 'MarketPaused', 'TokenWithdrawalsPaused', 'ExpiredWithdrawal', 'InvalidSignerEpoch', 'WithdrawalAlreadyUsed', 'InvalidSignature'].map((name) => `error ${name}()`),
+  ...['NotWhitelisted', 'MarketPaused', 'TokenWithdrawalsPaused', 'ExpiredWithdrawal', 'InvalidSignerEpoch', 'WithdrawalAlreadyUsed', 'InvalidSignature',
+    'InvalidAdmission', 'ExpiredAdmission', 'AdmissionAlreadyUsed', 'AdmissionBlocked', 'UnauthorizedPauser', 'UnauthorizedGuardian',
+    'ResumeRequiresGuardians', 'NothingToResume', 'ResumeAlreadyApproved', 'ResumeNotReady'].map((name) => `error ${name}()`),
 ];
 const UINT_MAX = (1n << 256n) - 1n;
 const checkedUint = (value) => {
@@ -332,8 +342,25 @@ export class RubaClient {
       this.vault.withdrawalsPaused(this.config.tokens.RUBA.address, block),
       this.vault.withdrawalsPaused(this.config.tokens.USDT.address, block),
     ]);
+    const pauseRoles = await this.#readPauseRoles(account, block);
     await this.assertContext();
-    return { owner, isOwner: owner === account, marketPaused, withdrawalsPaused: { RUBA: rubaPaused, USDT: usdtPaused } };
+    return {
+      owner, isOwner: owner === account, marketPaused, withdrawalsPaused: { RUBA: rubaPaused, USDT: usdtPaused },
+      ...(pauseRoles ? { pauseRoles } : {}),
+    };
+  }
+
+  async #readPauseRoles(account, block) {
+    let configured;
+    try { configured = await this.vault.pauseGuardiansConfigured(block); } catch { return null; }
+    if (!configured) return null;
+    const [isGuardian, market, ruba, usdt] = await Promise.all([
+      this.vault.isPauseGuardian(account, block), this.vault.marketResumeStatus(block),
+      this.vault.tokenWithdrawalsResumeStatus(this.config.tokens.RUBA.address, block),
+      this.vault.tokenWithdrawalsResumeStatus(this.config.tokens.USDT.address, block),
+    ]);
+    const status = (value) => ({ approvals: Number(value.approvals ?? value[1]), readyAt: BigInt(value.readyAt ?? value[2]) });
+    return { isGuardian, market: status(market), withdrawals: { RUBA: status(ruba), USDT: status(usdt) } };
   }
 
   async getWhitelist(input) {
@@ -351,22 +378,54 @@ export class RubaClient {
   }
 
   async setMarketPaused(paused, onProgress) {
+    if (!paused) {
+      const resume = await this.#guardianResume(() => this.vault.marketResumeStatus(), () => this.vault.approveMarketResume(), () => this.vault.executeMarketResume(), 'работы рынка');
+      if (resume) return this.#sendAdminAction('tx:market-pause', false, resume.title, resume.send, onProgress, resume.access);
+    }
     const title = paused ? 'Поставить рынок на паузу' : 'Возобновить работу рынка';
-    return this.#sendAdminAction('tx:market-pause', paused, title, () => this.vault.setMarketPaused(paused), onProgress);
+    return this.#sendAdminAction('tx:market-pause', paused, title, () => this.vault.setMarketPaused(paused), onProgress, paused ? 'pauser' : 'owner');
   }
 
   async setTokenWithdrawalsPaused(token, paused, onProgress) {
     this.token(token);
     const { address, symbol = token } = this.config.tokens[token];
+    if (!paused) {
+      const resume = await this.#guardianResume(() => this.vault.tokenWithdrawalsResumeStatus(address), () => this.vault.approveTokenWithdrawalsResume(address),
+        () => this.vault.executeTokenWithdrawalsResume(address), `вывода ${symbol}`);
+      if (resume) return this.#sendAdminAction('tx:withdrawal-pause', false, resume.title, resume.send, onProgress, resume.access);
+    }
     const title = paused ? `Приостановить вывод ${symbol}` : `Возобновить вывод ${symbol}`;
-    return this.#sendAdminAction('tx:withdrawal-pause', paused, title, () => this.vault.setTokenWithdrawalsPaused(address, paused), onProgress);
+    return this.#sendAdminAction('tx:withdrawal-pause', paused, title, () => this.vault.setTokenWithdrawalsPaused(address, paused), onProgress, paused ? 'pauser' : 'owner');
   }
 
-  async #sendAdminAction(key, flag, title, send, onProgress = () => {}) {
+  /** With pause roles set, resume is two guardian approvals and, after the delay, an execute call open to anyone. */
+  async #guardianResume(readStatus, approve, execute, what) {
+    let configured = false;
+    try { configured = await this.vault.pauseGuardiansConfigured(); } catch { return null; }
+    if (!configured) return null;
+    const { blockTag } = await this.#readLatestBlock();
+    const [status, block] = await Promise.all([readStatus(), this.provider.getBlock(blockTag)]);
+    const readyAt = BigInt(status.readyAt ?? status[2]);
+    if (readyAt > 0n && block && BigInt(block.timestamp) >= readyAt) {
+      return { title: `Завершить возобновление ${what}`, send: execute, access: 'anyone' };
+    }
+    if (readyAt > 0n) throw new Error('Две роли уже одобрили возобновление. Дождитесь окончания задержки и нажмите ещё раз.');
+    return { title: `Одобрить возобновление ${what} (нужно 2 из 3 ролей)`, send: approve, access: 'guardian' };
+  }
+
+  async #sendAdminAction(key, flag, title, send, onProgress = () => {}, access = 'owner') {
     if (typeof flag !== 'boolean') throw new Error('Укажите состояние настройки.');
-    await this.#walletStep('check:owner', 'check', 'Проверить право владельца Vault', async () => {
+    const checkTitle = { owner: 'Проверить право владельца Vault', pauser: 'Проверить право ставить паузу', guardian: 'Проверить роль паузы', anyone: 'Проверить готовность возобновления' }[access];
+    await this.#walletStep('check:owner', 'check', checkTitle, async () => {
       const account = await this.assertContext();
-      if (await this.#readVaultOwner(await this.#readLatestBlock()) !== account) throw new Error('Изменять настройки может только владелец выбранного Vault.');
+      if (access === 'anyone') return;
+      const block = await this.#readLatestBlock();
+      const isOwner = await this.#readVaultOwner(block) === account;
+      if (access === 'owner' && !isOwner) throw new Error('Изменять настройки может только владелец выбранного Vault.');
+      if (access === 'owner') return;
+      const roles = await this.#readPauseRoles(account, block);
+      if (access === 'pauser' && !isOwner && !roles?.isGuardian) throw new Error('Ставить паузу может только владелец Vault или одна из ролей паузы.');
+      if (access === 'guardian' && !roles?.isGuardian) throw new Error('Одобрить возобновление может только одна из трёх ролей паузы.');
     });
 
     onProgress('Подтвердите изменение настройки в кошельке.');
@@ -430,6 +489,52 @@ export class RubaClient {
     const [RUBA, USDT] = await Promise.all([this.tokens.RUBA.balanceOf(account), this.tokens.USDT.balanceOf(account)]);
     await this.assertContext();
     return { RUBA: BigInt(RUBA), USDT: BigInt(USDT) };
+  }
+
+  get hasAdmissionDesk() { return this.config.admission?.mode === 'desk-approval'; }
+
+  async getAdmissionInfo() {
+    if (!this.hasAdmissionDesk) return null;
+    const info = await requestJson(this.fetchImpl, '/admission');
+    if (getAddress(info.requestDomain?.verifyingContract ?? ZeroAddress) !== this.config.vaultAddress
+      || BigInt(info.requestDomain.chainId) !== BigInt(this.config.chainId)) throw new Error('Заявка на допуск относится к другому рынку.');
+    if (keccak256(toUtf8Bytes(info.consentText)) !== info.consentHash) throw new Error('Текст согласия не совпадает с его хешем.');
+    return info;
+  }
+
+  async applyForAdmission(rawKycId, onProgress = () => {}) {
+    const kycId = String(rawKycId ?? '').trim().toUpperCase();
+    if (!/^[A-Z0-9-]{4,64}$/.test(kycId)) throw new Error('Номер KYC: от 4 до 64 символов, латинские буквы, цифры и дефис.');
+    const info = await this.getAdmissionInfo();
+    if (!info) throw new Error('На этом рынке допуск выдаёт только администратор.');
+    const account = await this.assertContext();
+    const signer = getAddress(await this.vault.admissionSigner());
+    if (signer !== getAddress(info.admissionSigner)) throw new Error('Подписант допуска в Vault не совпадает с сервером. Заявку не отправляем.');
+    const signedAt = BigInt(Math.floor(Date.now() / 1000));
+    const message = { account, consentHash: info.consentHash, kycIdHash: keccak256(toUtf8Bytes(kycId)), signedAt };
+    const signature = await this.#walletStep('sign:admission', 'signature', 'Подписать согласие с риском RUBA и заявку',
+      () => this.signer.signTypedData(info.requestDomain, info.requestTypes, message));
+    const { result } = await requestJson(this.fetchImpl, '/admission/apply', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ account, kycId, signedAt: signedAt.toString(), signature }),
+    });
+    const admission = result?.admission;
+    if (!admission || getAddress(admission.account) !== account || admission.consentHash !== info.consentHash) {
+      throw new Error('Сервер вернул одобрение не для этого кошелька.');
+    }
+    const recovered = verifyTypedData({ name: 'RubaVault', version: '1', chainId: this.config.chainId, verifyingContract: this.config.vaultAddress },
+      { Admission: [{ name: 'account', type: 'address' }, { name: 'kycHash', type: 'bytes32' }, { name: 'consentHash', type: 'bytes32' },
+        { name: 'deadline', type: 'uint256' }, { name: 'nonce', type: 'uint256' }] }, admission, result.signature);
+    if (getAddress(recovered) !== signer) throw new Error('Одобрение подписано не тем ключом допуска.');
+    onProgress('Одобрение получено. Подтвердите транзакцию допуска в кошельке.');
+    await this.assertContext();
+    return this.#walletStep('tx:admit', 'transaction', 'Отправить допуск в Vault', async (update) => {
+      const transaction = await this.vault.admit(admission, result.signature);
+      update('Транзакция отправлена. Ждём подтверждения допуска.');
+      const receipt = await waitForPublication(transaction, this.publicationWaitMs);
+      if (Number(receipt?.status) !== 1) throw new Error('Допуск не подтверждён. Проверьте кошелёк перед повтором.');
+      return { receipt, kycHash: admission.kycHash };
+    });
   }
 
   async faucet(token, onProgress = () => {}) {
