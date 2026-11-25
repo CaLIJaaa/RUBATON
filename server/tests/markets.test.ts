@@ -256,6 +256,55 @@ test('closeBatch refuses legacy markets before consuming its administrator nonce
   } finally { await f.close(); }
 });
 
+test('administrator rebuildQueue is signed, refuses a Vault that moved ahead and returns the rebuilt publication', async () => {
+  const f = fixture();
+  try {
+    const selected = f.runtimes[1]; selected.config.proofMode = 'zk';
+    let rebuilds = 0, chainVersion = 1n;
+    const checkpoint = { stateVersion: 1n, journalSeq: 2 };
+    const owner = BigInt(other.address);
+    Object.assign(selected.engine, {
+      getAcceptedCheckpoint: () => checkpoint,
+      journal: { operations: () => [{ seq: 1, owner }, { seq: 3, owner }] },
+      rebuildQueue(rule: (op: { kind: number; owner: string }) => string | undefined) {
+        rebuilds++;
+        assert.equal(rule({ kind: 3, owner: other.address }), 'owner is not whitelisted');
+        assert.equal(rule({ kind: 2, owner: other.address }), undefined);
+        return { changed: true, fromStateVersion: 1n, kept: 1, dropped: [{ seq: 3, kind: 3, owner: other.address, reason: 'owner is not whitelisted' }], trades: [], pendingVersions: [2n] };
+      },
+    });
+    let owners: string[] = [];
+    Object.assign(selected.chain, {
+      async sync() {},
+      async queueRules(list: string[]) {
+        owners = list;
+        return { stateVersion: chainVersion, blockNumber: 77, rule: ({ kind }: { kind: number }) => kind === 3 ? 'owner is not whitelisted' : undefined };
+      },
+      async getPublicationRequest() { return { status: 'waiting', request: null, progress: { collected: 1, required: 4 } }; },
+    });
+    const command = { kind: 'rebuildQueue', marketId: 'ruba-weth' };
+    await assert.rejects(f.server.control(await f.signed(command, 0n, other)), /Unauthorized/);
+    assert.equal(rebuilds, 0);
+    const response = await f.server.control(await f.signed(command));
+    assert.deepEqual(owners, [other.address]);
+    assert.equal(rebuilds, 1);
+    const result = response.result as { marketId: string; changed: boolean; blockNumber: number; dropped: unknown[]; publication: { status: string } };
+    assert.equal(result.marketId, 'ruba-weth'); assert.equal(result.changed, true); assert.equal(result.blockNumber, 77);
+    assert.equal(result.dropped.length, 1); assert.equal(result.publication.status, 'waiting');
+    chainVersion = 2n;
+    await assert.rejects(f.server.control(await f.signed(command)), /Vault уже принял/);
+    assert.equal(rebuilds, 1);
+  } finally { await f.close(); }
+});
+
+test('rebuildQueue refuses legacy markets before consuming its administrator nonce', async () => {
+  const f = fixture();
+  try {
+    await assert.rejects(f.server.control(await f.signed({ kind: 'rebuildQueue', marketId: 'ruba-usdt' })), /ZK ledger/);
+    assert.equal(f.server.catalog().control.nonce, 0n);
+  } finally { await f.close(); }
+});
+
 test('reference changes update the current target without inventing or rewriting accepted history points', async () => {
   const f = fixture();
   try {

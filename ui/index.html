@@ -208,6 +208,9 @@
               <p class="help-text">Пакет из 1–3 обменов можно закрыть вручную. Комиссию за публикацию оплачивает администратор.</p>
               <button id="close-current-batch" type="button" disabled>Закрыть текущий пакет</button>
               <p id="batch-close-result" class="help-text" role="status" aria-live="polite">Пакет ещё не запрашивался.</p>
+              <p class="help-text">Если Vault не принимает готовый переход, потому что трейдера исключили или рынок на паузе, очередь можно пересобрать. Сервер уберёт операции, которые Vault отклонит, и соберёт переход заново из остальных.</p>
+              <button id="rebuild-queue" type="button" class="secondary" disabled>Пересобрать очередь</button>
+              <p id="rebuild-queue-result" class="help-text" role="status" aria-live="polite">Очередь не пересобиралась.</p>
             </fieldset>
           </section>
         </div>

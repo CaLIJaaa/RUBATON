@@ -449,6 +449,7 @@ function updateControls() {
   element('arbitrage-controls').disabled = disabled || !admin || !state.dashboard?.arbitrage;
   element('batch-admin-controls').disabled = disabled || !admin || !isZk();
   element('close-current-batch').disabled = disabled || !admin || !isZk();
+  element('rebuild-queue').disabled = disabled || !admin || !isZk();
   element('swap-demo-tab').disabled = locked;
   renderSwapTabs();
   renderReadiness();
@@ -1941,6 +1942,36 @@ element('close-current-batch').addEventListener('click', () => runWallet('Зак
       : 'Пакет закрыт и сохранён. Продолжите публикацию через панель готового пакета; повторять закрытие не нужно.';
   }
   element('batch-close-result').textContent = message;
+  await refreshDashboard(version);
+  setStatus(message);
+}));
+element('rebuild-queue').addEventListener('click', () => runWallet('Пересборка очереди', 'Проверяем очередь…', [
+  checklist('sign:demo-rebuildQueue', 'Подписать пересборку очереди'),
+  checklist('sequence:publication', 'Опубликовать пересобранные ZK-переходы', true),
+], async (version) => {
+  if (!isZk() || !state.catalog || state.account?.toLowerCase() !== state.catalog.control.admin.toLowerCase()) throw new Error('Пересобрать очередь может только администратор выбранного ZK-рынка.');
+  const marketId = state.selectedMarketId;
+  const response = await sendDemoCommand({ kind: 'rebuildQueue', marketId }, version);
+  guard(version);
+  const result = response.result;
+  if (!result || result.marketId !== marketId) throw new Error('Получен результат пересборки другого рынка.');
+  const catalog = await loadMarkets(); guard(version); state.catalog = catalog;
+  let message;
+  if (!result.changed) {
+    message = 'Vault примет все операции в очереди, пересобирать нечего.';
+  } else {
+    const removed = result.dropped.length;
+    const base = `Очередь пересобрана: оставлено ${result.kept}, убрано ${removed}. Убранные операции владельцы подписывают заново.`;
+    if (!result.pendingVersions.length) message = `${base} Публиковать нечего.`;
+    else if (result.preparationError || !result.publication) message = `${base} Доказательство пока не готово, повторите публикацию через панель готового пакета.`;
+    else {
+      const last = result.pendingVersions.at(-1);
+      const publication = await runPublicationChecklist(version, last, result.publication);
+      guard(version);
+      message = publication.completed ? `${base} Переходы до №${last} опубликованы.` : `${base} Продолжите публикацию через панель готового пакета.`;
+    }
+  }
+  element('rebuild-queue-result').textContent = message;
   await refreshDashboard(version);
   setStatus(message);
 }));

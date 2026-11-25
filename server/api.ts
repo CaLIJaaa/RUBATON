@@ -12,6 +12,7 @@ import { AdmissionDesk, AdmissionError } from './admission.ts';
 import { getStaticResponse } from './static.ts';
 import { disclosureBundle } from './disclosure.ts';
 import type { ZkRubaEngine } from './zk/engine.ts';
+import type { ZkVaultChain } from './zk/chain.ts';
 import { field } from '../zk/crypto.js';
 
 export type Operation =
@@ -118,6 +119,32 @@ export class RubaApi {
         // fails, and allow the existing publication endpoint to retry safely.
         return { closedThroughStateVersion, publication: null,
           preparationError: 'Пакет закрыт, но доказательство пока не подготовлено. Повторите подготовку публикации.' };
+      }
+    });
+  }
+
+  /** Called only after the MarketsServer has authenticated an administrator.
+   * Rebuilds the unpublished queue against the whitelist and pause of the latest block. */
+  async rebuildQueue() {
+    return this.serial(async () => {
+      if (this.config.proofMode !== 'zk') throw new Error('Queue rebuild requires the ZK ledger');
+      await this.chain.sync();
+      const engine = this.engine as ZkRubaEngine;
+      const chain = this.chain as unknown as ZkVaultChain;
+      const checkpoint = engine.getAcceptedCheckpoint();
+      const owners = engine.journal.operations().filter((op) => op.seq > checkpoint.journalSeq)
+        .map((op) => getAddress('0x' + op.owner.toString(16).padStart(40, '0')));
+      const context = await chain.queueRules(owners);
+      const accepted = engine.getAcceptedCheckpoint();
+      if (context.stateVersion !== accepted.stateVersion) throw new HttpError(409, 'Vault уже принял следующий переход. Дождитесь подтверждения блока и повторите пересборку.');
+      const rebuild = engine.rebuildQueue(context.rule);
+      const result = { ...rebuild, blockNumber: context.blockNumber };
+      if (!rebuild.changed || !rebuild.pendingVersions.length) return { ...result, publication: null };
+      try {
+        return { ...result, publication: await this.chain.getPublicationRequest() };
+      } catch {
+        return { ...result, publication: null,
+          preparationError: 'Очередь пересобрана, но доказательство пока не подготовлено. Повторите подготовку публикации.' };
       }
     });
   }

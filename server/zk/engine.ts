@@ -21,11 +21,25 @@ const ZERO_POOL = (): PoolFields => [0n, 0n, 0n, 0n, 0n, 0n];
 const zeroMetadata = (): OperationMetadata => ({ kind: 0n, slot: 0n, owner: 0n, commitment: 0n, eventId: 0n, token: 0n, amount: 0n, reference: 0n, signature: '0x' });
 const zeroDA = (): AccountDA => ({ kind: 0n, slot: 0n, owner: 0n, newLeaf: 0n, ciphertext: Array<bigint>(7).fill(0n) });
 const same = isDeepStrictEqual;
+const ownerAddress = (owner: bigint) => getAddress('0x' + owner.toString(16).padStart(40, '0'));
+const emptyLedger = (ledger: State): State => ({ version: ledger.version, domain: cloneZk(ledger.domain), custody: { RUBA: 0n, USDT: 0n },
+  reserves: { RUBA: 0n, USDT: 0n }, balances: {}, shares: {}, totalSupply: 0n, lockedLiquidity: 0n, actionNonces: {}, withdrawalNonces: {},
+  withdrawals: {}, deposits: {}, settlementEvents: {}, nextTradeId: 1n, receipts: [], batches: [] });
 
 export interface ZkAuthorization { account: string; commitment: bigint | string; nonce: bigint | string; salt: bigint | string; signature: string }
 export interface CanonicalInboxRecord {
   eventId: bigint; kind: 2 | 7; owner: string; token: Token; amount: bigint; reference: bigint;
   legacyEventId: string; transactionHash?: string; blockNumber?: number;
+}
+/** Returns a reason when the Vault would reject this operation at publication. */
+export type QueueRule = (operation: { kind: number; owner: string }) => string | undefined;
+export interface QueueRebuildResult {
+  changed: boolean;
+  fromStateVersion: bigint;
+  kept: number;
+  dropped: { seq: number; kind: number; owner: string; reason: string }[];
+  trades: { owner: string; previousTradeId: bigint; tradeId: bigint }[];
+  pendingVersions: bigint[];
 }
 export interface PreparedAuthorization {
   kind: number; slot: number; owner: bigint; nonce: bigint; spendNonce: bigint;
@@ -417,6 +431,85 @@ export class ZkRubaEngine extends RubaEngine {
       this.sealReady(ledger, false);
       return this.journal.transitions().find((transition) => transition.status === 'pending');
     });
+  }
+  /** Administrator queue rebuild. A pending transition that the Vault would now reject
+   * (owner removed from the whitelist, market paused) blocks every later one. Rejected
+   * operations and later owner-signed operations of the same account are dropped, the
+   * journal returns to the accepted checkpoint and the rest is replayed with the original
+   * owner signatures. Vault inbox events are never dropped. */
+  rebuildQueue(rule: QueueRule): QueueRebuildResult {
+    return this.mutate((ledger) => {
+      const checkpoint = this.journal.checkpoint();
+      const all = this.journal.operations();
+      const tail = all.filter((op) => op.seq > checkpoint.journalSeq);
+      const pendingVersions = () => this.journal.transitions().filter((item) => item.status === 'pending').map((item) => item.stateVersion);
+      const rejected = new Map<number, string>();
+      for (const op of tail) {
+        const reason = rule({ kind: op.kind, owner: ownerAddress(op.owner) });
+        if (!reason) continue;
+        if (!USER_KINDS.has(op.kind)) throw new Error('Vault inbox events cannot be dropped from the queue');
+        rejected.set(op.seq, reason);
+      }
+      if (!rejected.size) return { changed: false, fromStateVersion: checkpoint.stateVersion, kept: tail.length, dropped: [], trades: [], pendingVersions: pendingVersions() };
+      const base: State = checkpoint.journalSeq === 0 ? emptyLedger(ledger) : cloneZk(all[checkpoint.journalSeq - 1].ledgerAfter!);
+      base.receipts = cloneZk(ledger.receipts.filter((receipt) => receipt.tradeId < checkpoint.nextTradeId));
+      base.batches = cloneZk(ledger.batches.filter((batch) => batch.batchId <= checkpoint.tradeBatchId));
+      base.actionNonces = cloneZk(ledger.actionNonces);
+      for (const key of Object.keys(ledger)) delete (ledger as unknown as Record<string, unknown>)[key];
+      Object.assign(ledger, base);
+      this.journal.rewind(checkpoint, tail);
+      this.assertLedgerMatches(checkpoint.state, ledger);
+      const dropped: QueueRebuildResult['dropped'] = [];
+      const trades: QueueRebuildResult['trades'] = [];
+      const blocked = new Set<string>();
+      let kept = 0;
+      for (const op of tail) {
+        const owner = ownerAddress(op.owner);
+        const reason = rejected.get(op.seq) ?? (USER_KINDS.has(op.kind) && blocked.has(owner) ? 'follows a dropped operation of this account' : undefined);
+        if (reason) {
+          dropped.push({ seq: op.seq, kind: op.kind, owner, reason }); blocked.add(owner);
+          continue;
+        }
+        this.makeRoom(ledger, op.kind);
+        try { this.replayOperation(op, owner, ledger); }
+        catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (!USER_KINDS.has(op.kind)) throw new Error(`Vault inbox event ${op.metadata.eventId} cannot be replayed: ${message}`);
+          dropped.push({ seq: op.seq, kind: op.kind, owner, reason: `replay failed: ${message}` }); blocked.add(owner);
+          continue;
+        }
+        kept++;
+        if (op.kind === 3) trades.push({ owner, previousTradeId: op.receipt!.tradeId, tradeId: ledger.receipts.at(-1)!.tradeId });
+      }
+      if (this.journal.operations(true).length) this.sealReady(ledger, true, true);
+      this.validateJournal();
+      return { changed: true, fromStateVersion: checkpoint.stateVersion, kept, dropped, trades, pendingVersions: pendingVersions() };
+    });
+  }
+  private makeRoom(ledger: State, kind: number): void {
+    const tail = this.journal.operations(true);
+    const firstSwap = tail.findIndex((op) => op.kind === 3);
+    if (firstSwap === -1) return;
+    const auxiliary = tail.slice(firstSwap).filter((op) => op.kind !== 3).length;
+    if (tail.length - firstSwap >= 8 || (kind !== 3 && auxiliary >= 4)) this.sealReady(ledger, true, true);
+  }
+  private replayOperation(op: ZkOperationRecord, owner: string, ledger: State): void {
+    if (op.kind === 2 || op.kind === 7) {
+      const legacyEventId = op.kind === 7 ? op.ledgerAfter?.withdrawals[`${owner}:${op.metadata.reference}`]?.settlementEventId : `replay:${op.metadata.eventId}`;
+      if (!legacyEventId) throw new Error('Settlement has no stored chain event identity');
+      this.applyInboxRecord({ eventId: op.metadata.eventId, kind: op.kind, owner, token: op.metadata.token === 0n ? 'RUBA' : 'USDT',
+        amount: op.metadata.amount, reference: op.metadata.reference, legacyEventId });
+      return;
+    }
+    const token: Token = op.params[0] === 0n ? 'RUBA' : 'USDT';
+    this.withZkAuthorization({ account: owner, commitment: op.metadata.commitment, nonce: op.oldAccount[4], salt: op.newAccount[8], signature: op.metadata.signature }, () => {
+      if (op.kind === 1) this.registerZkAccount(owner, op.recoveryKey, op.slot);
+      else if (op.kind === 3) this.swap(owner, token, op.params[1], op.params[2]);
+      else if (op.kind === 4) this.addLiquidity(owner, op.params[0], op.params[1], op.params[2], op.params[3]);
+      else if (op.kind === 5) this.removeLiquidity(owner, op.params[0], op.params[1], op.params[2]);
+      else this.reserveWithdrawal(owner, token, op.params[1], MAX64, 0n);
+    });
+    if (op.kind === 5) this.sealReady(ledger, true, true);
   }
   listTransitions(): ZkTransition[] { return this.journal.transitions(); }
   getTransition(version: bigint): ZkTransition | undefined { return this.journal.transition(version); }

@@ -79,6 +79,8 @@ test('control commands reject extra fields, ambiguous decimals, changed USDT, un
       { kind: 'monitor', marketId: 'ruba-usdt', balances: true },
       { kind: 'closeBatch', marketId: 'unknown' },
       { kind: 'closeBatch', marketId: 'ruba-usdt', reveal: true },
+      { kind: 'rebuildQueue', marketId: 'unknown' },
+      { kind: 'rebuildQueue', marketId: 'ruba-usdt', drop: [1] },
     ]) assert.throws(() => f.store.apply(command, 0n));
     assert.equal(f.store.getNonce(), 0n); assert.equal(f.store.getSettings().revision, 0n);
     assert.deepEqual(validateControlCommand({ kind: 'arbitrage', marketId: 'ruba-usdt', enabled: true, delaySeconds: 3600 }, markets),
