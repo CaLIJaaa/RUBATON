@@ -4,11 +4,13 @@ We have four test ERC20 tokens, all clearly marked as demo: RUBA (18 decimals), 
 
 The current release uses new Vaults and a new verifier, with state in `data/sepolia-partial-v2-20261123`. Its checked public snapshot is in [deployments/sepolia-v2.json](../deployments/sepolia-v2.json). The older `deployments/sepolia.json` and the bot disclosure file belong to a previous release, so don't take token addresses or reserves from there
 
-## Who can do what (updated 2026-11-23)
+## Who can do what (updated 2026-11-25)
 
 REGISTER, new deposits, SWAP and ADD_LP need the owner to be on the whitelist of that particular Vault. Market pause does not block REGISTER, but it does block deposits, SWAP and ADD_LP. REMOVE_LP, reserving a withdrawal, settling a payout and redeeming an accepted claim work without the whitelist. Deposits the Vault has already received must still be processed after the whitelist is revoked. Anyone can publish a proof: admission is checked for the owner of each REGISTER, SWAP or ADD_LP, not for whoever pays the gas
 
 These checks live in the new Vault bytecode. Admission by itself did not need any Circom changes, it was partial batches that required new circuit artifacts and a new verifier. Updating the server or the UI cannot change the old Vaults, they are immutable. Their manifests, databases and balances are not reset or migrated
+
+From 25 November, admission can be handled by a separate desk: the user signs consent and a KYC reference, the desk signs an approval, and the user sends `admit` to the Vault and pays gas. The Vault stores hashes of the KYC reference and consent. KYC verification is still a stub. The owner can grant access directly as before. Three pause guardians can stop a market or token payouts; resuming requires two approvals and the configured delay. The old Sepolia Vaults have not been updated. See [RISK_CONTROLS_RU.md](RISK_CONTROLS_RU.md)
 
 ## Server config
 
@@ -36,6 +38,7 @@ POST /admin/action takes `{command,nonce,deadline,signature}`. The EIP712 domain
 - `{kind:'arbitrage',marketId,enabled:boolean,delaySeconds:integer}`, delay from 5 to 3600
 - `{kind:'monitor',marketId}` returns the current private price and reserves for the admin. This is not an accepted onchain snapshot, and it uses up a control nonce
 - `{kind:'closeBatch',marketId}` closes a tail of 1-3 swaps in the selected market and starts preparing the publication. Same admin signature, nonce and deadline as other commands. It does not authorize onchain publication and does not spend server ETH
+- `{kind:'rebuildQueue',marketId}` lets the admin rebuild a rejected pending queue from the last accepted checkpoint. The server drops invalid signed actions and later actions from the same account, then recalculates the remaining transition with the original signatures. Accepted on-chain events are not removed
 
 Responses look like `{result,nonce,revision}`. For closeBatch the result has marketId, closedThroughStateVersion and publication. If the proof could not be prepared, the closed boundary and the used nonce stay, publication is null and preparationError explains why. The UI publishes only up to that boundary. closeBatch does not bump the settings revision
 
@@ -47,11 +50,13 @@ A trade transition has 1 to 4 real swaps. The fourth swap closes the batch autom
 
 There is no timer, no plaintext reserves on chain and no automatic disclosure to a regulator. A regulator gets selected receipts and proofs separately. Publication still needs only a proof, anyone can do it, and the sending wallet pays. The old MIN_TRADES_PER_BATCH=4 is about the old path, the ZK path allows 1
 
-What we assume: the admin, the prover and someone to pay gas are available. If pause or admission changes before publication, we don't automatically rebuild the invalid tail and there is no onchain cancellation. An operation that became forbidden can make the whole transition fail and block the ones after it. Smaller batches mix fewer users and don't guarantee anonymity. Autonomous emergency exit tickets are not done yet. Existing Sepolia contracts, manifests and databases are not migrated. More in [PARTIAL_BATCHES.md](PARTIAL_BATCHES.md)
+What we assume: the admin, the prover and someone to pay gas are available. If pause or admission changes before publication, the server does not automatically rebuild an invalid tail and there is no onchain cancellation. The admin can request `rebuildQueue`, but this still depends on a working server. An operation that became forbidden can make the whole transition fail and block the ones after it. Smaller batches mix fewer users and don't guarantee anonymity. Autonomous emergency exit tickets are not done yet. Existing Sepolia contracts, manifests and databases are not migrated. More in [PARTIAL_BATCHES.md](PARTIAL_BATCHES.md)
 
 ## Bot
 
 The code is in server/arbitrage.ts, price math can live in server/price-math.ts. ArbitrageSettings is `{enabled,delaySeconds,maxTradeBps,minDeviationBps}` with defaults maxTradeBps 2000 and minDeviationBps 40. So far the UI only lets you turn it on and set the delay. The target price of a pair is computed exactly as USD(base)/USD(quote) from the global USD references, taking real token decimals into account. We use exact BigInt V2 math with 997/1000 and rounding down, and find the correcting amount by binary search, limited by the bot's internal balance and a reserve cap. Four assets and three pairs is not triangular arbitrage: the bot is a market maker that follows an external price and has separate funds in each Vault
+
+The monitoring bot in `server/monitor-bot.ts` is separate from the demo trading bot. With `MONITOR_PRIVATE_KEY` set, it checks token transfers, the configured sanctions list, coverage, roots and stuck transitions, plus price and volume, every 12 seconds by default. Failed transfers and insufficient coverage trigger a pause. Other problems are logged as alerts. The bot cannot resume a market. See [RISK_CONTROLS_RU.md](RISK_CONTROLS_RU.md)
 
 The worker constructor takes `{markets,botSigner,transactionSigner,settings, transactionQueue,now?}`. The signer and queue are shared, so Ethereum nonces stay in order across all pools. settings() returns `{revision,prices,arbitrage}`. getStatus(id), runOnce(nowMs?), start(intervalMs?), stop() and drain() control the worker. The worker never changes the engine outside RubaApi.execute: it uses the internal hooks to check the prepared root and settings revision in beforeApply and to write `arb:<planId>:<stepId>` metadata in onCommit. Signed requests and plan state are saved before sending, and after a restart the worker picks up finished commitments and tradeIds before retrying. The bot signs only its own operations. No user keys, no moving balances around
 

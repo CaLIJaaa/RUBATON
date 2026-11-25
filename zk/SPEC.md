@@ -36,7 +36,13 @@ Private parameters `[p0,p1,p2,p3]`:
 
 Each operation changes one account leaf, plus the pool, cursor and trade counter. inboxCursor moves only on real bridge events, one at a time. REGISTER, SWAP, ADD, REMOVE and RESERVE need the user's EIP-712 signature. The old REFUND was signed by the operator, and the new proof-only publication rejects kind8 completely. DEPOSIT and SETTLE need no extra signature because the contract ties them to its own inbox
 
-commitment=fold(OP,[domain,kind,slot,owner,oldSpendNonce,p0,p1,p2,p3,newSalt]). Typed authorization: domain `{name:RubaZkOperation,version:2,chainId,verifyingContract:vault}`; primary type `PrivateOperation(uint256 commitment)`. Registration uses the same authorization. There is no separate expiry. The HTTP Action deadline only limits the first submission, after that the one-time spendNonce signature has to stay publishable while its batch is still open. Cancelling on the server does not revoke the signature. The new publishProvenTransition ticket requires no operator permit, deadline or epoch. Historical publishZkTransition tickets used a separate expiring operator authorization; the new Vault disables that entry point. Old fields kept for wire compatibility never authorize a new call. The browser computes the commitment itself and never signs an opaque value from the server. The server and prover see recovery and viewing keys and plaintext, but never wallet signing keys. Owner addresses and changed slots are public, amounts stay hidden
+`commitment=fold(OP,[domain,kind,slot,owner,oldSpendNonce,p0,p1,p2,p3,newSalt])`. The EIP-712 domain is `{name:RubaZkOperation,version:2,chainId,verifyingContract:vault}`. Registration, LP removal and withdrawal reservation use `PrivateOperation(uint256 commitment)` without an expiry.
+
+For SWAP and ADD_LP, the UI signs `TimedPrivateOperation(uint256 commitment,uint256 deadline)`, currently valid for one hour. The packed signature is 97 bytes: 32 bytes for `deadline` followed by 65 bytes of ECDSA. The Vault checks the deadline on publication. No circuit or verifier changes were needed because signatures are checked in Solidity, not in Circom. The Vault still recognizes the old 65-byte format for compatibility, so those older signatures do not have an on-chain expiry.
+
+The HTTP Action deadline applies to the initial server request; it is separate from the on-chain signature deadline. Dropping an operation on the server does not revoke a signature. `publishProvenTransition` needs no operator permit, deadline or epoch. Older `publishZkTransition` requests used an expiring operator authorization, but that entry point is disabled in the new Vault. Legacy fields may still appear in API data and do not authorize publication.
+
+The browser calculates the commitment before asking the wallet to sign. The server and prover see operation details and recovery/viewing keys, but not wallet signing keys. Owner addresses and changed slots are public. Swap amounts are not published in plaintext, although other public data can leak information about them
 
 ## Circuit inputs and public signals
 
@@ -64,7 +70,9 @@ Receipt v2 uses field-native fold(RECEIPT,[2,chainId,vault,tradeId,owner,tokenIn
 
 The existing signed RubaMarketControl command `{kind:"closeBatch",marketId}` authorizes the server to seal the selected market. It uses the administrator signer, control nonce and deadline. It grants no authority to forge owner signatures or bypass admission. Proof publication itself remains permissionless and is paid by the submitting wallet. A regulator receives selected receipt openings and Merkle paths separately; sealing does not publish those plaintexts
 
-What we assume on purpose: the admin and prover are available and someone is willing to pay gas, there is no close timer, and a sealed tail is not rebuilt automatically if a pause or whitelist revocation makes an operation invalid before publication. Such a transition can still fail and block dependent transitions. Closure is not a server-independent or censorship-resistant exit. Partial packets give a smaller mixing set; even four do not guarantee privacy against metadata/reserve analysis. The current Sepolia contracts stay as they are until we deploy replacements
+The admin, prover and a wallet willing to pay gas must remain available. There is no timer that forces a batch to close or publish. If pause or whitelist changes make a pending transition invalid, it will not fix itself. An admin can run `rebuildQueue` from the last accepted checkpoint, but this needs the server and cannot rewrite on-chain history.
+
+A rejected transition can block the next ones. Closing a batch is not an emergency exit or a guarantee against censorship. Even a four-swap batch does not make trading anonymous: metadata and pool updates still reveal information. The Sepolia contracts deployed before this update need to be redeployed to use these changes
 
 ## Recovery / persistence / tests
 
