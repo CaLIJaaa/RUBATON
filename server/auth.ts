@@ -12,6 +12,21 @@ export const ZK_OPERATION_TYPES = { PrivateOperation: [{ name: 'commitment', typ
 export function zkOperationDomain(chainId: bigint, vaultAddress: string) {
   return { name: 'RubaZkOperation', version: '2', chainId, verifyingContract: getAddress(vaultAddress) };
 }
+/** Same consent with an owner deadline. The Vault rejects it after the deadline. */
+export const ZK_TIMED_OPERATION_TYPES = { TimedPrivateOperation: [{ name: 'commitment', type: 'uint256' }, { name: 'deadline', type: 'uint256' }] };
+/** Timed signatures travel as 97 bytes: the deadline word, then the 65-byte ECDSA signature. */
+export function timedOperationSignature(deadline: bigint, signature: string): string {
+  if (!/^0x[0-9a-fA-F]{130}$/.test(signature) || deadline < 0n || deadline >= 1n << 256n) throw new Error('Invalid timed operation signature');
+  return '0x' + deadline.toString(16).padStart(64, '0') + signature.slice(2);
+}
+export function operationSignatureDeadline(signature: string): bigint | undefined {
+  return /^0x[0-9a-fA-F]{194}$/.test(signature) ? BigInt('0x' + signature.slice(2, 66)) : undefined;
+}
+export function recoverOperationSigner(domain: ReturnType<typeof zkOperationDomain>, commitment: bigint | string, signature: string): string {
+  const deadline = operationSignatureDeadline(signature);
+  if (deadline === undefined) return getAddress(verifyTypedData(domain, ZK_OPERATION_TYPES, { commitment }, signature));
+  return getAddress(verifyTypedData(domain, ZK_TIMED_OPERATION_TYPES, { commitment, deadline }, '0x' + signature.slice(66)));
+}
 
 export const ACTION_TYPES = {
   Action: [

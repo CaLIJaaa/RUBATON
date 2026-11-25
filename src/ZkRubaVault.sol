@@ -23,6 +23,8 @@ contract ZkRubaVault is RubaVault {
     uint256 public constant MIN_ZK_TRADES_PER_BATCH = 1;
     uint256 public constant MAX_ZK_TRADES_PER_BATCH = 4;
     bytes32 public constant PRIVATE_OPERATION_TYPEHASH = keccak256("PrivateOperation(uint256 commitment)");
+    bytes32 public constant TIMED_OPERATION_TYPEHASH =
+        keccak256("TimedPrivateOperation(uint256 commitment,uint256 deadline)");
     bytes32 public constant ZK_PUBLICATION_TYPEHASH =
         keccak256("ZkPublication(uint256 headerDigest,uint256 deadline,uint256 signerEpoch)");
     bytes32 private constant DOMAIN_TYPEHASH =
@@ -118,6 +120,7 @@ contract ZkRubaVault is RubaVault {
     error InvalidInboxMessage();
     error InvalidRegistration();
     error InvalidOperationAuthorization();
+    error OperationExpired();
     error LegacyWithdrawalDisabled();
     error InvalidWithdrawalOpening();
     error UnacceptedWithdrawal();
@@ -209,6 +212,22 @@ contract ZkRubaVault is RubaVault {
     function privateOperationDigest(uint256 commitment) public view returns (bytes32) {
         _requireField(commitment);
         return _typedDigest("RubaZkOperation", keccak256(abi.encode(PRIVATE_OPERATION_TYPEHASH, commitment)));
+    }
+
+    function timedOperationDigest(uint256 commitment, uint256 deadline) public view returns (bytes32) {
+        _requireField(commitment);
+        return _typedDigest(
+            "RubaZkOperation", keccak256(abi.encode(TIMED_OPERATION_TYPEHASH, commitment, deadline))
+        );
+    }
+
+    /// A 97-byte signature carries the owner's deadline in its first word. The proof
+    /// does not cover signatures, so the deadline needs no circuit change.
+    function _operationSigner(OperationMetadata calldata op) private view returns (address) {
+        if (op.signature.length != 97) return ECDSA.recover(privateOperationDigest(op.commitment), op.signature);
+        uint256 deadline = uint256(bytes32(op.signature[:32]));
+        if (block.timestamp > deadline) revert OperationExpired();
+        return ECDSA.recover(timedOperationDigest(op.commitment, deadline), op.signature[32:]);
     }
 
     function zkPublicationDigest(uint256[13] calldata signals, uint256 deadline, uint256 epoch)
@@ -445,7 +464,7 @@ contract ZkRubaVault is RubaVault {
                     if (op.eventId != 0 || op.token != 0 || op.amount != 0 || op.referenceId != 0) {
                         revert InvalidOperationMetadata();
                     }
-                    if (ECDSA.recover(privateOperationDigest(op.commitment), op.signature) != op.owner) {
+                    if (_operationSigner(op) != op.owner) {
                         revert InvalidOperationAuthorization();
                     }
                 }

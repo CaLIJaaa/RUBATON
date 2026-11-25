@@ -5,6 +5,7 @@ import { Contract, JsonRpcProvider, NonceManager, Wallet, Interface } from 'ethe
 import type { ServerConfig } from '../server/config.ts';
 import type { Operation, ZkOperation, ActionRequest } from '../server/api.ts';
 import { RubaApi } from '../server/api.ts';
+import { admissionDeskFromEnv } from '../server/admission.ts';
 import { ZkRubaEngine } from '../server/zk/engine.ts';
 import { ZkVaultChain, ZK_VAULT_ABI } from '../server/zk/chain.ts';
 import type { MarketRuntime } from '../server/market-types.ts';
@@ -49,7 +50,10 @@ export async function createMarketRuntimes(manifest: DeploymentManifest, keys: P
       chmodSync(path, 0o600);
       const chain = new ZkVaultChain(config, engine);
       try { await chain.initialize(); } catch (error) { await chain.prover.close(); chain.provider.destroy(); engine.close(); throw error; }
-      markets.push({ id: definition.id, label: pool.label, config, engine, chain, api: new RubaApi(engine, chain, config) });
+      const api = new RubaApi(engine, chain, config);
+      const desk = admissionDeskFromEnv(process.env, config.chainId, config.vaultAddress, `${path}.admission.sqlite`);
+      if (desk) api.attachAdmissionDesk(desk);
+      markets.push({ id: definition.id, label: pool.label, config, engine, chain, api });
     }
     return markets;
   } catch (error) { await closeMarketRuntimes(markets); throw error; }
@@ -160,10 +164,27 @@ export async function serveMarkets(markets: MarketRuntime[], manifest: Deploymen
     await new Promise<void>((resolve, reject) => { http.once('error', reject); http.listen(settings.port, '127.0.0.1', () => { http.off('error', reject); resolve(); }); });
   } catch (error) { provider.destroy(); await server.close(); throw error; }
   const stopWorkers = server.startWorkers();
+  const stopMonitor = await startMonitors(markets, provider, settings.directory);
   return { server, arb, http, async close() {
-    arb.stop(); stopWorkers();
+    arb.stop(); stopWorkers(); stopMonitor();
     await new Promise<void>((resolve) => { http.close(() => resolve()); http.closeIdleConnections(); });
     await arb.drain(); await server.drain(); await transactionQueue.drain(); await server.close();
     provider.destroy(); await closeMarketRuntimes(markets);
   } };
+}
+
+async function startMonitors(markets: MarketRuntime[], provider: JsonRpcProvider, directory: string): Promise<() => void> {
+  const key = process.env.MONITOR_PRIVATE_KEY;
+  if (!key) return () => {};
+  const { createChainMonitor, startMonitorLoop } = await import('../server/monitor-bot.ts');
+  const signer = new NonceManager(new Wallet(key, provider));
+  const bots = markets.map((market) => createChainMonitor({
+    market: market.id, provider, signer, vaultAddress: market.config.vaultAddress, engine: market.engine,
+    tokenAddresses: { RUBA: market.config.rubaAddress, USDT: market.config.usdtAddress },
+    decimals: market.config.tokenMetadata ? { RUBA: market.config.tokenMetadata.RUBA.decimals, USDT: market.config.tokenMetadata.USDT.decimals } : undefined,
+    dbPath: join(directory, `monitor-${market.id}.sqlite`), sanctionsFile: process.env.MONITOR_SANCTIONS_FILE,
+  }));
+  const stop = startMonitorLoop(bots, Number(process.env.MONITOR_INTERVAL_MS ?? 12_000),
+    (event) => console.log(`[monitor] ${event.market} ${event.criterion} ${event.severity}: ${event.detail}`));
+  return () => { stop(); for (const bot of bots) bot.close(); };
 }

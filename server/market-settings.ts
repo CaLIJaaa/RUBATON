@@ -13,7 +13,8 @@ export type ControlCommand =
   | { kind: 'prices'; prices: ReferencePrices }
   | { kind: 'arbitrage'; marketId: string; enabled: boolean; delaySeconds: number }
   | { kind: 'monitor'; marketId: string }
-  | { kind: 'closeBatch'; marketId: string };
+  | { kind: 'closeBatch'; marketId: string }
+  | { kind: 'rebuildQueue'; marketId: string };
 export interface AcceptedHistoryPoint {
   stateVersion: bigint; root: bigint; blockNumber: number; timestamp: bigint;
   blockHash?: string;
@@ -53,10 +54,10 @@ export function validateControlCommand(value: unknown, marketIds: readonly strin
     if (parsed.USDT !== '1') throw new Error('The manual USDT reference price is fixed at 1');
     return { kind, prices: parsed };
   }
-  if (kind === 'arbitrage' || kind === 'monitor' || kind === 'closeBatch') {
+  if (kind === 'arbitrage' || kind === 'monitor' || kind === 'closeBatch' || kind === 'rebuildQueue') {
     const command = object(value, kind === 'arbitrage' ? ['kind', 'marketId', 'enabled', 'delaySeconds'] : ['kind', 'marketId'], `${kind} command`);
     if (typeof command.marketId !== 'string' || !marketIds.includes(command.marketId)) throw new Error('Unknown market');
-    if (kind === 'monitor' || kind === 'closeBatch') return { kind, marketId: command.marketId };
+    if (kind === 'monitor' || kind === 'closeBatch' || kind === 'rebuildQueue') return { kind, marketId: command.marketId };
     if (typeof command.enabled !== 'boolean' || typeof command.delaySeconds !== 'number' || !Number.isInteger(command.delaySeconds)
       || command.delaySeconds < 5 || command.delaySeconds > 3600) throw new Error('Arbitrage delay must be an integer from 5 to 3600 seconds');
     return { kind, marketId: command.marketId, enabled: command.enabled, delaySeconds: command.delaySeconds };
@@ -117,7 +118,7 @@ export class MarketSettingsStore {
       const nonce = this.getNonce(); const settings = this.getSettings();
       if (expectedNonce !== nonce || nonce === MAX_UINT) throw new Error('Invalid control nonce; refresh the catalog before signing');
       let result: unknown;
-      if (command.kind === 'closeBatch') {
+      if (command.kind === 'closeBatch' || command.kind === 'rebuildQueue') {
         // Persist the one-shot administrator authorization before asynchronous
         // market sealing/proving. A retry uses a fresh control nonce.
         result = { marketId: command.marketId };

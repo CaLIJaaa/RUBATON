@@ -243,6 +243,14 @@ export class MarketsServer {
         const result = await market.api.closeBatch();
         return { ...accepted, result: { marketId: command.marketId, ...result } };
       }
+      if (command.kind === 'rebuildQueue') {
+        const market = this.market(command.marketId);
+        if (market.config.proofMode !== 'zk') throw new MarketHttpError(400, 'Queue rebuild requires the ZK ledger');
+        this.assertMarketHealthy(market);
+        const accepted = this.settings.apply(command, nonce);
+        const result = await market.api.rebuildQueue();
+        return { ...accepted, result: { marketId: command.marketId, ...result } };
+      }
       return this.settings.apply(command, nonce, command.kind === 'monitor' ? () => this.monitor(command.marketId) : undefined);
     });
     this.controlQueue = run.catch(() => undefined); return run;

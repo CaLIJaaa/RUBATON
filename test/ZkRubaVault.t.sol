@@ -677,6 +677,61 @@ contract ZkRubaVaultAuthorizationAndDaTest is ZkRubaVaultFixture {
         _publish(t);
     }
 
+    function _timed(uint256 commitment, uint256 deadline, uint256 key) internal view returns (bytes memory) {
+        return abi.encodePacked(bytes32(deadline), _signature(vault.timedOperationDigest(commitment, deadline), key));
+    }
+
+    function testTimedOperationDigestFollowsEip712() public view {
+        bytes32 domainType =
+            keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
+        bytes32 operationDomain = keccak256(
+            abi.encode(domainType, keccak256("RubaZkOperation"), keccak256("2"), block.chainid, address(vault))
+        );
+        bytes32 operationHash = keccak256(
+            abi.encode(
+                keccak256("TimedPrivateOperation(uint256 commitment,uint256 deadline)"), uint256(1234), uint256(77)
+            )
+        );
+        assertEq(
+            vault.timedOperationDigest(1234, 77), keccak256(abi.encodePacked(hex"1901", operationDomain, operationHash))
+        );
+    }
+
+    function testTimedOperationSignatureWorksUntilItsDeadline() public {
+        uint256 deadline = block.timestamp + 1 hours;
+        Transition memory t = _base(0);
+        t.operations[0] = _operation(1, 0, ALICE_KEY, 1234);
+        t.operations[0].signature = _timed(1234, deadline, ALICE_KEY);
+        t = _seal(t);
+        vm.warp(deadline);
+        _publish(t);
+        assertEq(vault.ownerSlotPlusOne(alice), 1);
+    }
+
+    function testTimedOperationSignatureExpiresAndItsDeadlineCannotBeEdited() public {
+        uint256 deadline = block.timestamp + 1 hours;
+        Transition memory t = _base(0);
+        t.operations[0] = _operation(1, 0, ALICE_KEY, 1234);
+        t.operations[0].signature = _timed(1234, deadline, ALICE_KEY);
+        t = _seal(t);
+        vm.warp(deadline + 1);
+        vm.expectRevert(ZkRubaVault.OperationExpired.selector);
+        _publish(t);
+
+        bytes memory moved = _timed(1234, deadline, ALICE_KEY);
+        uint256 later = deadline + 1 days;
+        assembly {
+            mstore(add(moved, 32), later)
+        }
+        t = _base(0);
+        t.operations[0] = _operation(1, 0, ALICE_KEY, 1234);
+        t.operations[0].signature = moved;
+        t = _seal(t);
+        vm.expectRevert(ZkRubaVault.InvalidOperationAuthorization.selector);
+        _publish(t);
+        assertEq(vault.ownerSlotPlusOne(alice), 0);
+    }
+
     function testExistingSlotOwnerCannotBeChangedAndRefundIsDisabledEvenWithOperatorSignature() public {
         _register();
         Transition memory t = _base(0);

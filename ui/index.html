@@ -208,6 +208,9 @@
               <p class="help-text">Пакет из 1–3 обменов можно закрыть вручную. Комиссию за публикацию оплачивает администратор.</p>
               <button id="close-current-batch" type="button" disabled>Закрыть текущий пакет</button>
               <p id="batch-close-result" class="help-text" role="status" aria-live="polite">Пакет ещё не запрашивался.</p>
+              <p class="help-text">Если Vault не принимает готовый переход, потому что трейдера исключили или рынок на паузе, очередь можно пересобрать. Сервер уберёт операции, которые Vault отклонит, и соберёт переход заново из остальных.</p>
+              <button id="rebuild-queue" type="button" class="secondary" disabled>Пересобрать очередь</button>
+              <p id="rebuild-queue-result" class="help-text" role="status" aria-live="polite">Очередь не пересобиралась.</p>
             </fieldset>
           </section>
         </div>
@@ -298,6 +301,18 @@
             </tbody>
           </table>
         </div>
+        <form id="admission-form" class="admission-panel" hidden>
+          <fieldset data-requires-wallet>
+            <legend>Заявка на допуск</legend>
+            <p id="admission-consent-text" class="help-text"></p>
+            <p>
+              <label for="admission-kyc-id">Номер проверки KYC</label>
+              <input id="admission-kyc-id" name="kycId" type="text" autocomplete="off" placeholder="KYC-0001" required>
+            </p>
+            <p class="help-text">Кошелёк подпишет согласие и заявку, потом отправит транзакцию допуска в Vault. Номер KYC и соль остаются у администратора допуска, в сеть попадает только хеш.</p>
+            <button id="admission-apply" type="submit" disabled>Подписать согласие и получить допуск</button>
+          </fieldset>
+        </form>
         <div class="forms-grid">
           <form id="deposit-form">
             <fieldset data-requires-wallet data-new-activity data-deposit disabled>

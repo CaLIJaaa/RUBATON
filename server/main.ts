@@ -6,6 +6,7 @@ import { ZkRubaEngine } from './zk/engine.ts';
 import { ZkVaultChain } from './zk/chain.ts';
 import { FIELD } from '../zk/crypto.js';
 import { keccak256, toUtf8Bytes } from 'ethers';
+import { admissionDeskFromEnv } from './admission.ts';
 
 async function main() {
   const config = loadConfig();
@@ -16,6 +17,8 @@ async function main() {
   const chain = engine instanceof ZkRubaEngine ? new ZkVaultChain(config, engine) : new VaultChain(config, engine);
   await chain.initialize();
   const api = new RubaApi(engine, chain, config);
+  const desk = admissionDeskFromEnv(process.env, config.chainId, config.vaultAddress, process.env.ADMISSION_DB_PATH ?? `${config.dbPath}.admission.sqlite`);
+  if (desk) api.attachAdmissionDesk(desk);
   const server = api.createHttpServer();
   const stopWorker = api.startWorker();
   await new Promise<void>((resolve, reject) => {

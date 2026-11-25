@@ -252,7 +252,7 @@ function validateCommand(command, catalog) {
     return;
   }
   if (!catalog.markets.some((market) => market.id === command.marketId)) throw new Error('Неизвестный рынок команды.');
-  if (['monitor', 'closeBatch'].includes(command.kind) && Object.keys(command).sort().join(',') === 'kind,marketId') return;
+  if (['monitor', 'closeBatch', 'rebuildQueue'].includes(command.kind) && Object.keys(command).sort().join(',') === 'kind,marketId') return;
   if (command.kind === 'arbitrage' && Object.keys(command).sort().join(',') === 'delaySeconds,enabled,kind,marketId'
     && typeof command.enabled === 'boolean' && Number.isInteger(command.delaySeconds) && command.delaySeconds >= 5 && command.delaySeconds <= 3600) return;
   throw new Error('Некорректные настройки арбитража.');
@@ -288,6 +288,7 @@ export function sendControl({ provider, signer, command: rawCommand, fetchImpl =
       arbitrage: `Подписать настройки бота: ${command.enabled ? 'включить' : 'выключить'}, задержка ${command.delaySeconds} с`,
       monitor: 'Разрешить чтение состояния пула',
       closeBatch: 'Подписать закрытие текущего пакета',
+      rebuildQueue: 'Подписать пересборку очереди',
     }[command.kind];
     const step = { id: Symbol(), key: `sign:demo-${command.kind}`, kind: 'signature', title };
     const report = (phase) => {
@@ -304,7 +305,7 @@ export function sendControl({ provider, signer, command: rawCommand, fetchImpl =
       throw error;
     }
     await check();
-    return json(fetchImpl, '/admin/action', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ command, nonce, deadline, signature }) }, command.kind === 'closeBatch' ? 120_000 : 20_000);
+    return json(fetchImpl, '/admin/action', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ command, nonce, deadline, signature }) }, ['closeBatch', 'rebuildQueue'].includes(command.kind) ? 120_000 : 20_000);
   });
   controlQueue = job.catch(() => undefined);
   return job;

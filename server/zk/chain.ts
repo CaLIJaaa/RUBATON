@@ -4,7 +4,7 @@ import { VaultChain, VAULT_ABI } from '../chain.ts';
 import type { ServerConfig } from '../config.ts';
 import { tokenMetadata } from '../config.ts';
 import type { PublicReceiptBatch, PublicationPreparation, Token, WithdrawalRecord } from '../types.ts';
-import type { ZkRubaEngine } from './engine.ts';
+import type { QueueRule, ZkRubaEngine } from './engine.ts';
 import { Groth16TransitionProver } from './prover.ts';
 import { checkedSignals, SIGNAL, ZK_PROOF_MODE, ZK_WITHDRAWAL_MODE, type ProveableTransition, type ZkSignedPublication, type ZkWithdrawalTicket } from './types.ts';
 import type { PublicationMetadata, DaRecord, PoolDa } from '../../zk/schema.ts';
@@ -291,6 +291,29 @@ export class ZkVaultChain extends VaultChain {
   }
 
   override async publishPendingBatches(): Promise<void> { return this.serialObservation(() => this.observeTransitions()); }
+
+  /** Whitelist and market pause exactly as publishProvenTransition will check them, read at one latest block. */
+  async queueRules(owners: readonly string[]): Promise<{ stateVersion: bigint; blockNumber: number; rule: QueueRule }> {
+    return this.serialObservation(async () => {
+      await this.observeTransitions();
+      const tip = await this.provider.getBlock('latest');
+      if (!tip?.hash) throw new Error('Cannot read the latest block for the queue rebuild');
+      const readAt = { blockTag: tip.number };
+      const unique = [...new Set(owners.map((owner) => getAddress(owner)))];
+      const [version, paused, ...allowed] = await Promise.all([this.zkVault.stateVersion(readAt), this.vault.marketPaused(readAt),
+        ...unique.map((owner) => this.vault.whitelist(owner, readAt))]);
+      if ((await this.provider.getBlock(tip.number))?.hash !== tip.hash) throw new Error('Chain changed while reading the queue rules; retry');
+      const whitelisted = new Map(unique.map((owner, index) => [owner, Boolean(allowed[index])]));
+      const publishBy = BigInt(tip.timestamp) + 300n;
+      const rule: QueueRule = ({ kind, owner, deadline }) => {
+        if (deadline !== undefined && deadline < publishBy) return 'owner deadline passed';
+        if ((kind === 1 || kind === 3 || kind === 4) && !whitelisted.get(getAddress(owner))) return 'owner is not whitelisted';
+        if ((kind === 3 || kind === 4) && paused) return 'market is paused';
+        return undefined;
+      };
+      return { stateVersion: BigInt(version), blockNumber: tip.number, rule };
+    });
+  }
 
   private async canonicalHeader(version: bigint, blockNumber: number): Promise<bigint[]> {
     const header = checkedSignals(await this.zkVault.transitions(version, { blockTag: blockNumber }));

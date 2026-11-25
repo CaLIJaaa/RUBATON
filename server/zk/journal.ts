@@ -184,6 +184,16 @@ export class ZkJournal {
       if (Number(result.changes) !== 1) throw new Error('Transition overlaps an already sealed operation');
     }
   }
+  /** Drop every unpublished operation and transition. Runs only inside the engine's queue rebuild transaction. */
+  rewind(checkpoint: AcceptedCheckpoint, removed: readonly ZkOperationRecord[]): void {
+    for (const op of removed) if (op.kind === 1) this.db.prepare('DELETE FROM zk_keys WHERE slot=?').run(op.slot);
+    this.db.prepare('DELETE FROM zk_operations WHERE seq>?').run(checkpoint.journalSeq);
+    this.db.prepare('DELETE FROM zk_transitions WHERE version>?').run(Number(checkpoint.stateVersion));
+    this.db.prepare("UPDATE sqlite_sequence SET seq=? WHERE name='zk_operations'").run(checkpoint.journalSeq);
+    this.db.prepare('UPDATE zk_current SET state=? WHERE id=1').run(encodeZk(checkpoint.state));
+    const proofCache = this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='zk_proof_cache'").get();
+    if (proofCache) this.db.prepare('DELETE FROM zk_proof_cache WHERE CAST(state_version AS INTEGER)>?').run(Number(checkpoint.stateVersion));
+  }
   accept(version: bigint, txHash: string, blockNumber: number): ZkTransition {
     const transition = this.transition(version);
     if (!transition) throw new Error('Unknown ZK transition');
