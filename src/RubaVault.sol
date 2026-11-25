@@ -66,6 +66,23 @@ contract RubaVault is Ownable2Step, EIP712, ReentrancyGuard {
         uint256 guardianEpoch;
     }
 
+    struct Admission {
+        address account;
+        bytes32 kycHash;
+        bytes32 consentHash;
+        uint256 deadline;
+        uint256 nonce;
+    }
+
+    bytes32 public constant ADMISSION_TYPEHASH = keccak256(
+        "Admission(address account,bytes32 kycHash,bytes32 consentHash,uint256 deadline,uint256 nonce)"
+    );
+    address public admissionSigner;
+    mapping(uint256 nonce => bool used) public usedAdmissionNonces;
+    mapping(address account => bytes32 kycHash) public kycHashOf;
+    mapping(address account => bytes32 consentHash) public consentHashOf;
+    mapping(address account => bool blocked) public admissionBlocked;
+
     uint256 public constant PAUSE_GUARDIAN_COUNT = 3;
     uint256 public constant RESUME_APPROVALS = 2;
     uint256 public constant MAX_RESUME_DELAY = 7 days;
@@ -99,6 +116,10 @@ contract RubaVault is Ownable2Step, EIP712, ReentrancyGuard {
     error InvalidSignature();
     error InvalidBatch();
     error OwnershipRenounceDisabled();
+    error InvalidAdmission();
+    error ExpiredAdmission();
+    error AdmissionAlreadyUsed();
+    error AdmissionBlocked();
     error PauseGuardiansAlreadyConfigured();
     error PauseGuardiansNotConfigured();
     error InvalidPauseGuardians();
@@ -123,11 +144,19 @@ contract RubaVault is Ownable2Step, EIP712, ReentrancyGuard {
     event WhitelistUpdated(address indexed account, bool allowed);
     event MarketPauseUpdated(bool paused);
     event TokenWithdrawalPauseUpdated(address indexed token, bool paused);
+    event AdmissionSignerUpdated(address indexed previousSigner, address indexed newSigner);
+    event Admitted(address indexed account, bytes32 kycHash, bytes32 consentHash, uint256 indexed nonce);
     event PauseGuardiansConfigured(address[3] guardians, uint256 resumeDelay);
-    event ResumeApproved(address indexed token, uint256 indexed round, address indexed guardian, uint256 approvals);
+    event ResumeApproved(
+        address indexed token, uint256 indexed round, address indexed guardian, uint256 approvals
+    );
     event ResumeScheduled(address indexed token, uint256 indexed round, uint256 readyAt);
-    event PauseGuardianRotationApproved(uint256 indexed index, address indexed newGuardian, address indexed guardian);
-    event PauseGuardianRotated(uint256 indexed index, address indexed previousGuardian, address indexed newGuardian);
+    event PauseGuardianRotationApproved(
+        uint256 indexed index, address indexed newGuardian, address indexed guardian
+    );
+    event PauseGuardianRotated(
+        uint256 indexed index, address indexed previousGuardian, address indexed newGuardian
+    );
     event OperatorUpdated(address indexed previousOperator, address indexed newOperator, uint256 signerEpoch);
     event BatchPublished(
         uint256 indexed batchId,
@@ -307,10 +336,57 @@ contract RubaVault is Ownable2Step, EIP712, ReentrancyGuard {
         return MerkleProof.verifyCalldata(proof, batch.receiptsRoot, leaf);
     }
 
+    /// @notice Owner exclusion also blocks any admission approval issued earlier.
     function setWhitelist(address account, bool allowed) external onlyOwner {
         if (account == address(0)) revert InvalidAddress();
         whitelist[account] = allowed;
+        admissionBlocked[account] = !allowed;
         emit WhitelistUpdated(account, allowed);
+    }
+
+    function setAdmissionSigner(address nextSigner) external onlyOwner {
+        if (nextSigner.code.length != 0 || (nextSigner != address(0) && nextSigner == owner())) {
+            revert InvalidAddress();
+        }
+        emit AdmissionSignerUpdated(admissionSigner, nextSigner);
+        admissionSigner = nextSigner;
+    }
+
+    /// @notice The participant sends the admission desk approval and pays the gas.
+    /// The approval binds this vault and chain, a KYC hash with salt and the accepted risk text.
+    function admit(Admission calldata admission, bytes calldata signature) external {
+        if (msg.sender != admission.account) revert UnauthorizedAccount();
+        if (admission.kycHash == bytes32(0) || admission.consentHash == bytes32(0)) {
+            revert InvalidAdmission();
+        }
+        if (block.timestamp > admission.deadline) revert ExpiredAdmission();
+        if (usedAdmissionNonces[admission.nonce]) revert AdmissionAlreadyUsed();
+        if (admissionBlocked[admission.account]) revert AdmissionBlocked();
+        address signer = admissionSigner;
+        if (signer == address(0) || ECDSA.recover(admissionDigest(admission), signature) != signer) {
+            revert InvalidSignature();
+        }
+        usedAdmissionNonces[admission.nonce] = true;
+        whitelist[admission.account] = true;
+        kycHashOf[admission.account] = admission.kycHash;
+        consentHashOf[admission.account] = admission.consentHash;
+        emit Admitted(admission.account, admission.kycHash, admission.consentHash, admission.nonce);
+        emit WhitelistUpdated(admission.account, true);
+    }
+
+    function admissionDigest(Admission calldata admission) public view returns (bytes32) {
+        return _hashTypedDataV4(
+            keccak256(
+                abi.encode(
+                    ADMISSION_TYPEHASH,
+                    admission.account,
+                    admission.kycHash,
+                    admission.consentHash,
+                    admission.deadline,
+                    admission.nonce
+                )
+            )
+        );
     }
 
     /// @notice Pause is open to the owner and every pause guardian. Before guardians are
@@ -366,7 +442,9 @@ contract RubaVault is Ownable2Step, EIP712, ReentrancyGuard {
 
     function isPauseGuardian(address account) public view returns (bool) {
         return pauseGuardiansConfigured && account != address(0)
-            && (account == _pauseGuardians[0] || account == _pauseGuardians[1] || account == _pauseGuardians[2]);
+            && (account == _pauseGuardians[0]
+                || account == _pauseGuardians[1]
+                || account == _pauseGuardians[2]);
     }
 
     function marketResumeStatus() external view returns (uint256 round, uint256 approvals, uint256 readyAt) {
